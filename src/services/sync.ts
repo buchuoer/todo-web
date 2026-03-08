@@ -74,7 +74,7 @@ function todoToRow(todo: Todo, userId: string): Omit<TodoRow, 'id' | 'created_at
     category: todo.category,
     deadline: todo.deadline ?? null,
     priority: todo.priority,
-    "order": todo.id, // store local numeric id as order
+    "order": Math.round(todo.id), // store local numeric id as order (bigint)
   }
 }
 

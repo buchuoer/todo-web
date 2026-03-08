@@ -595,7 +595,7 @@ function App() {
   const addLog = (type: LogEntry['type'], content: string) => {
     if (!content.trim()) return
     setLogs(prev => [...prev, {
-      id: Date.now() + Math.random(), type, content: content.trim(),
+      id: Math.floor(Date.now() * 1000 + Math.random() * 1000), type, content: content.trim(),
       createdAt: new Date().toISOString()
     }])
   }
@@ -707,7 +707,7 @@ function App() {
 
   const addTodo = (text: string, category: string = '生活', deadlineVal?: string, priorityVal: 'high' | 'medium' | 'low' = 'medium') => {
     if (!text.trim()) return
-    setTodos(prev => [{ id: Date.now() + Math.random(), text, completed: false, category, deadline: deadlineVal, priority: priorityVal }, ...prev])
+    setTodos(prev => [{ id: Math.floor(Date.now() * 1000 + Math.random() * 1000), text, completed: false, category, deadline: deadlineVal, priority: priorityVal }, ...prev])
     setInput('')
     setShowCategorySelect(false)
     setShowPrioritySelect(false)
