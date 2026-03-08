@@ -9,11 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "@supabase/supabase-js": "^2.98.0",
+    "axios": "^1.6.0",
     "lucide-react": "^0.263.1",
     "openai": "^4.0.0",
-    "axios": "^1.6.0"
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "vite-plugin-pwa": "^1.2.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.15",

@@ -3,9 +3,11 @@ import {
   Plus, CheckCircle2, Circle, CheckSquare, Sparkles, Loader2, Trash2,
   FolderOpen, Calendar, BookOpen, Send, User, Bot, Bold, Italic, List,
   Check, Moon, Sun, BarChart3, GripVertical, X, Undo2, Bell, ChevronLeft, ChevronRight,
-  Download, Upload
+  Download, Upload, LogOut, RefreshCw, WifiOff, Cloud, Settings, Pencil
 } from 'lucide-react'
 import { extractTodos, chatWithAI } from './services/ai'
+import { signIn, signUp, signOut, onAuthStateChange } from './services/auth'
+import { pushTodos, pushLogs, pushTags, fetchTodos, fetchLogs, fetchTags, subscribeTodos, subscribeLogs, subscribeTags } from './services/sync'
 import './App.css'
 
 // 日志类型
@@ -43,9 +45,20 @@ interface NotificationSettings {
   notifyOverdue: boolean
 }
 
+interface Tag {
+  id: string
+  name: string
+  color: string
+  bgColor: string
+  borderColor: string
+  isDefault: boolean
+  createdAt: string
+}
+
 // 常量
 const STORAGE_KEY = 'minimus-todos'
 const LOGS_STORAGE_KEY = 'minimus-logs'
+const TAGS_STORAGE_KEY = 'minimus-tags'
 const TODO_DRAFT_KEY = 'minimus-todo-draft'
 const LOG_DRAFT_KEY = 'minimus-log-draft'
 const DARK_MODE_KEY = 'minimus-dark-mode'
@@ -93,15 +106,24 @@ const getDeadlineInfo = (deadline: string, completed: boolean) => {
   return { text: `${daysLeft} 天后到期`, className: 'deadline-normal' }
 }
 
-// 分类配置
-const CATEGORY_CONFIG: Record<string, { color: string; bgColor: string; borderColor: string }> = {
-  '全部': { color: '#8E8E93', bgColor: '#F2F2F7', borderColor: 'rgba(142, 142, 147, 0.3)' },
-  '工作': { color: '#007AFF', bgColor: 'rgba(0, 122, 255, 0.1)', borderColor: 'rgba(0, 122, 255, 0.3)' },
-  '学习': { color: '#34C759', bgColor: 'rgba(52, 199, 89, 0.1)', borderColor: 'rgba(52, 199, 89, 0.3)' },
-  '生活': { color: '#FF9500', bgColor: 'rgba(255, 149, 0, 0.1)', borderColor: 'rgba(255, 149, 0, 0.3)' }
+// 标签色板
+const TAG_COLOR_PALETTE = ['#007AFF', '#34C759', '#FF9500', '#FF3B30', '#AF52DE', '#FF2D55', '#5AC8FA', '#5856D6', '#A2845E', '#8E8E93']
+
+const deriveTagColors = (hex: string) => {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return {
+    bgColor: `rgba(${r}, ${g}, ${b}, 0.1)`,
+    borderColor: `rgba(${r}, ${g}, ${b}, 0.3)`,
+  }
 }
 
-const CATEGORIES = Object.keys(CATEGORY_CONFIG)
+const DEFAULT_TAGS: Tag[] = [
+  { id: 'default-work', name: '工作', color: '#007AFF', ...deriveTagColors('#007AFF'), isDefault: true, createdAt: '2024-01-01T00:00:00.000Z' },
+  { id: 'default-study', name: '学习', color: '#34C759', ...deriveTagColors('#34C759'), isDefault: true, createdAt: '2024-01-01T00:00:01.000Z' },
+  { id: 'default-life', name: '生活', color: '#FF9500', ...deriveTagColors('#FF9500'), isDefault: true, createdAt: '2024-01-01T00:00:02.000Z' },
+]
 
 // 优先级配置
 const PRIORITY_CONFIG: Record<'high' | 'medium' | 'low', { color: string; label: string }> = {
@@ -119,6 +141,20 @@ const EMPTY_STATE_CONFIG: Record<string, { icon: string; title: string; hint: st
 }
 
 function App() {
+  // === 认证 & 同步状态 ===
+  const [user, setUser] = useState<any>(null)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'offline' | 'error'>('idle')
+  const isRemoteUpdate = useRef(false)
+  const syncTodosTimer = useRef<number | null>(null)
+  const syncLogsTimer = useRef<number | null>(null)
+  const syncTagsTimer = useRef<number | null>(null)
+
   // === 核心状态 ===
   const [todos, setTodos] = useState<Todo[]>(() => {
     try {
@@ -136,6 +172,12 @@ function App() {
       ]
     }
   })
+  const [tags, setTags] = useState<Tag[]>(() => {
+    try {
+      const saved = localStorage.getItem(TAGS_STORAGE_KEY)
+      return saved ? JSON.parse(saved) : DEFAULT_TAGS
+    } catch { return DEFAULT_TAGS }
+  })
   const [activeTab, setActiveTab] = useState<'todo' | 'logs' | 'calendar'>('todo')
   const [isAiLoading, setIsAiLoading] = useState(false)
   const [selectedCategory, setSelectedCategory] = useState('生活')
@@ -146,6 +188,12 @@ function App() {
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [pickerYear, setPickerYear] = useState(new Date().getFullYear())
   const [pickerMonth, setPickerMonth] = useState(new Date().getMonth())
+
+  // 标签管理状态
+  const [showTagManager, setShowTagManager] = useState(false)
+  const [editingTag, setEditingTag] = useState<Tag | null>(null)
+  const [newTagName, setNewTagName] = useState('')
+  const [newTagColor, setNewTagColor] = useState(TAG_COLOR_PALETTE[0])
 
   // 待办编辑状态
   const [editingTodoId, setEditingTodoId] = useState<number | null>(null)
@@ -221,16 +269,99 @@ function App() {
   // 删除动画
   const [removingTodoId, setRemovingTodoId] = useState<number | null>(null)
 
+  // === 派生标签配置（替代原 tagConfig） ===
+  const tagConfig: Record<string, { color: string; bgColor: string; borderColor: string }> = {}
+  tags.forEach(tag => {
+    tagConfig[tag.name] = { color: tag.color, bgColor: tag.bgColor, borderColor: tag.borderColor }
+  })
+  tagConfig['全部'] = { color: '#8E8E93', bgColor: '#F2F2F7', borderColor: 'rgba(142, 142, 147, 0.3)' }
+
+  // === 标签管理函数 ===
+  const addTag = (name: string, color: string) => {
+    if (!name.trim() || tags.some(t => t.name === name.trim())) return
+    const { bgColor, borderColor } = deriveTagColors(color)
+    const tag: Tag = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      color,
+      bgColor,
+      borderColor,
+      isDefault: false,
+      createdAt: new Date().toISOString(),
+    }
+    setTags(prev => [...prev, tag])
+    setNewTagName('')
+    setNewTagColor(TAG_COLOR_PALETTE[0])
+  }
+
+  const updateTag = (id: string, updates: { name?: string; color?: string }) => {
+    setTags(prev => prev.map(tag => {
+      if (tag.id !== id) return tag
+      const newColor = updates.color || tag.color
+      const newName = updates.name?.trim() || tag.name
+      const colors = updates.color ? deriveTagColors(newColor) : { bgColor: tag.bgColor, borderColor: tag.borderColor }
+      // 如果名称变了，同步更新所有 todo 的 category
+      if (updates.name && updates.name.trim() !== tag.name) {
+        setTodos(prevTodos => prevTodos.map(todo =>
+          todo.category === tag.name ? { ...todo, category: newName } : todo
+        ))
+      }
+      return { ...tag, name: newName, color: newColor, ...colors }
+    }))
+    setEditingTag(null)
+  }
+
+  const deleteTag = (id: string) => {
+    const tag = tags.find(t => t.id === id)
+    if (!tag || tag.isDefault) return
+    // 关联 todo 归入"生活"
+    setTodos(prevTodos => prevTodos.map(todo =>
+      todo.category === tag.name ? { ...todo, category: '生活' } : todo
+    ))
+    setTags(prev => prev.filter(t => t.id !== id))
+    if (selectedCategory === tag.name) setSelectedCategory('全部')
+  }
+
   // === 副作用 ===
   // 持久化日志
   useEffect(() => {
     try { localStorage.setItem(LOGS_STORAGE_KEY, JSON.stringify(logs)) } catch {}
-  }, [logs])
+    if (user && !isRemoteUpdate.current) {
+      if (syncLogsTimer.current) clearTimeout(syncLogsTimer.current)
+      setSyncStatus('syncing')
+      syncLogsTimer.current = window.setTimeout(() => {
+        pushLogs(logs, user.id)
+          .then(() => setSyncStatus('synced'))
+          .catch(() => setSyncStatus('error'))
+      }, 800)
+    }
+  }, [logs, user])
 
   // 持久化待办
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(todos)) } catch {}
-  }, [todos])
+    if (user && !isRemoteUpdate.current) {
+      if (syncTodosTimer.current) clearTimeout(syncTodosTimer.current)
+      setSyncStatus('syncing')
+      syncTodosTimer.current = window.setTimeout(() => {
+        pushTodos(todos, user.id)
+          .then(() => setSyncStatus('synced'))
+          .catch(() => setSyncStatus('error'))
+      }, 800)
+    }
+  }, [todos, user])
+
+  // 持久化标签
+  useEffect(() => {
+    try { localStorage.setItem(TAGS_STORAGE_KEY, JSON.stringify(tags)) } catch {}
+    if (user && !isRemoteUpdate.current) {
+      if (syncTagsTimer.current) clearTimeout(syncTagsTimer.current)
+      syncTagsTimer.current = window.setTimeout(() => {
+        pushTags(tags, user.id)
+          .catch((err) => console.warn('标签同步失败（tags 表可能未创建）:', err))
+      }, 800)
+    }
+  }, [tags, user])
 
   // 自动保存待办草稿
   useEffect(() => {
@@ -267,6 +398,105 @@ function App() {
   useEffect(() => {
     try { localStorage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(notificationSettings)) } catch {}
   }, [notificationSettings])
+
+  // === 认证状态监听 ===
+  useEffect(() => {
+    const unsubscribe = onAuthStateChange((u) => {
+      setUser(u)
+      setAuthChecked(true)
+    })
+    return unsubscribe
+  }, [])
+
+  // === 登录后初始同步 + 实时订阅 ===
+  useEffect(() => {
+    if (!user) return
+
+    let cancelled = false
+
+    const initSync = async () => {
+      setSyncStatus('syncing')
+      try {
+        const remoteTodos = await fetchTodos(user.id)
+        const remoteLogs = await fetchLogs(user.id)
+        // tags 表可能未创建，单独 try-catch
+        let remoteTags: Tag[] = []
+        try { remoteTags = await fetchTags(user.id) } catch {}
+        if (cancelled) return
+
+        if (remoteTodos.length === 0 && todos.length > 0) {
+          // 首次登录，本地有数据：迁移到云端
+          await pushTodos(todos, user.id)
+          await pushLogs(logs, user.id)
+          pushTags(tags, user.id).catch(() => {})
+        } else if (remoteTodos.length > 0) {
+          // 云端有数据：拉取覆盖本地
+          isRemoteUpdate.current = true
+          setTodos(remoteTodos)
+          setLogs(remoteLogs)
+          if (remoteTags.length > 0) setTags(remoteTags)
+          setTimeout(() => { isRemoteUpdate.current = false }, 200)
+        }
+        if (!cancelled) setSyncStatus('synced')
+      } catch (err) {
+        console.error('初始同步失败:', err)
+        if (!cancelled) setSyncStatus('error')
+      }
+    }
+
+    initSync()
+
+    // 实时订阅
+    const todosChannel = subscribeTodos(user.id, (newTodos) => {
+      isRemoteUpdate.current = true
+      setTodos(newTodos)
+      setTimeout(() => { isRemoteUpdate.current = false }, 200)
+    })
+    const logsChannel = subscribeLogs(user.id, (newLogs) => {
+      isRemoteUpdate.current = true
+      setLogs(newLogs)
+      setTimeout(() => { isRemoteUpdate.current = false }, 200)
+    })
+    let tagsChannel: ReturnType<typeof subscribeTags> | null = null
+    try {
+      tagsChannel = subscribeTags(user.id, (newTags) => {
+        isRemoteUpdate.current = true
+        setTags(newTags.length > 0 ? newTags : DEFAULT_TAGS)
+        setTimeout(() => { isRemoteUpdate.current = false }, 200)
+      })
+    } catch {}
+
+    return () => {
+      cancelled = true
+      todosChannel.unsubscribe()
+      logsChannel.unsubscribe()
+      tagsChannel?.unsubscribe()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
+
+  // === 在线/离线检测 ===
+  useEffect(() => {
+    const handleOnline = () => {
+      if (user) {
+        setSyncStatus('syncing')
+        Promise.all([pushTodos(todos, user.id), pushLogs(logs, user.id)])
+          .then(() => setSyncStatus('synced'))
+          .catch(() => setSyncStatus('error'))
+        pushTags(tags, user.id).catch(() => {})
+      }
+    }
+    const handleOffline = () => setSyncStatus('offline')
+
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    if (!navigator.onLine) setSyncStatus('offline')
+
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  })
 
   // 桌面通知检查
   useEffect(() => {
@@ -619,7 +849,7 @@ function App() {
     if (!input.trim()) return
     setIsAiLoading(true)
     try {
-      const extracted = await extractTodos(input)
+      const extracted = await extractTodos(input, tags.map(t => t.name))
       extracted.forEach((task: { text: string; deadline?: string | null; category: string }) => {
         addTodo(task.text, task.category, task.deadline || undefined, selectedPriority)
       })
@@ -639,10 +869,10 @@ function App() {
     completed: todos.filter(t => t.completed).length,
     pending: todos.filter(t => !t.completed).length,
     overdue: todos.filter(t => !t.completed && t.deadline && getDaysLeft(t.deadline) < 0).length,
-    byCategory: CATEGORIES.filter(c => c !== '全部').map(cat => ({
-      name: cat,
-      total: todos.filter(t => t.category === cat).length,
-      completed: todos.filter(t => t.category === cat && t.completed).length,
+    byCategory: tags.map(tag => ({
+      name: tag.name,
+      total: todos.filter(t => t.category === tag.name).length,
+      completed: todos.filter(t => t.category === tag.name && t.completed).length,
     })),
     completionRate: todos.length > 0 ? Math.round((todos.filter(t => t.completed).length / todos.length) * 100) : 0,
   }
@@ -667,6 +897,85 @@ function App() {
     setActiveTab(tab)
   }
 
+  // === 认证操作 ===
+  const handleAuth = async () => {
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setAuthError('请输入邮箱和密码')
+      return
+    }
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      if (authMode === 'login') {
+        await signIn(authEmail, authPassword)
+      } else {
+        await signUp(authEmail, authPassword)
+      }
+    } catch (err: any) {
+      setAuthError(err.message || '操作失败')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await signOut()
+      setUser(null)
+      setSyncStatus('idle')
+    } catch (err) {
+      console.error('退出失败:', err)
+    }
+  }
+
+  // === 认证检查中 ===
+  if (!authChecked) {
+    return (
+      <div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <Loader2 className="animate-spin" size={32} color="var(--primary)" />
+      </div>
+    )
+  }
+
+  // === 未登录：显示登录页 ===
+  if (!user) {
+    return (
+      <div className="auth-container">
+        <div className="auth-card">
+          <div className="auth-header">
+            <h1>Minimus</h1>
+            <Sparkles size={24} color="#007AFF" />
+            <p>Simple & Beautiful AI Todo</p>
+          </div>
+          <div className="auth-form">
+            <div className="auth-tabs">
+              <button className={authMode === 'login' ? 'active' : ''} onClick={() => { setAuthMode('login'); setAuthError('') }}>登录</button>
+              <button className={authMode === 'register' ? 'active' : ''} onClick={() => { setAuthMode('register'); setAuthError('') }}>注册</button>
+            </div>
+            {authError && <div className="auth-error">{authError}</div>}
+            <input
+              type="email"
+              placeholder="邮箱"
+              value={authEmail}
+              onChange={(e) => setAuthEmail(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+            />
+            <input
+              type="password"
+              placeholder="密码（至少 6 位）"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+            />
+            <button className="auth-submit" onClick={handleAuth} disabled={authLoading}>
+              {authLoading ? <Loader2 className="animate-spin" size={20} /> : (authMode === 'login' ? '登录' : '注册')}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app-container">
       <header>
@@ -674,6 +983,17 @@ function App() {
           <h1>Minimus</h1>
           <Sparkles className="ai-icon-pulse" size={24} color="#007AFF" />
           <div className="header-actions">
+            <div className={`sync-indicator sync-${syncStatus}`} title={
+              syncStatus === 'syncing' ? '同步中...' :
+              syncStatus === 'synced' ? '已同步' :
+              syncStatus === 'offline' ? '离线模式' :
+              syncStatus === 'error' ? '同步失败' : ''
+            }>
+              {syncStatus === 'syncing' && <RefreshCw size={14} className="animate-spin" />}
+              {syncStatus === 'synced' && <Cloud size={14} />}
+              {syncStatus === 'offline' && <WifiOff size={14} />}
+              {syncStatus === 'error' && <Cloud size={14} />}
+            </div>
             <button className="header-icon-btn" onClick={() => setShowNotificationPanel(!showNotificationPanel)} title="消息提醒">
               <Bell size={20} />
             </button>
@@ -682,6 +1002,9 @@ function App() {
             </button>
             <button className="header-icon-btn" onClick={() => setIsDarkMode(!isDarkMode)} title={isDarkMode ? '浅色模式' : '暗黑模式'}>
               {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+            </button>
+            <button className="header-icon-btn" onClick={handleLogout} title="退出登录">
+              <LogOut size={20} />
             </button>
           </div>
         </div>
@@ -726,7 +1049,7 @@ function App() {
             {stats.byCategory.map(cat => (
               <div key={cat.name} className="category-stat">
                 <div className="category-stat-header">
-                  <span className="category-stat-name" style={{ color: CATEGORY_CONFIG[cat.name]?.color }}>{cat.name}</span>
+                  <span className="category-stat-name" style={{ color: tagConfig[cat.name]?.color }}>{cat.name}</span>
                   <span className="category-stat-count">{cat.completed}/{cat.total}</span>
                 </div>
                 <div className="category-progress-bar">
@@ -734,7 +1057,7 @@ function App() {
                     className="category-progress-fill"
                     style={{
                       width: cat.total > 0 ? `${(cat.completed / cat.total) * 100}%` : '0%',
-                      backgroundColor: CATEGORY_CONFIG[cat.name]?.color
+                      backgroundColor: tagConfig[cat.name]?.color
                     }}
                   ></div>
                 </div>
@@ -825,20 +1148,36 @@ function App() {
         <div className="tab-content" key={activeTab}>
           {activeTab === 'todo' && (
             <div className="todo-section">
-              <div className="category-filter">
-                {CATEGORIES.map(cat => (
+              <div className="category-filter-wrapper">
+                <div className="category-filter">
                   <button
-                    key={cat}
-                    className={selectedCategory === cat ? 'active' : ''}
-                    onClick={() => setSelectedCategory(cat)}
-                    style={selectedCategory === cat ? {
-                      background: CATEGORY_CONFIG[cat]?.color,
-                      boxShadow: `0 2px 8px ${CATEGORY_CONFIG[cat]?.borderColor}`
+                    key="全部"
+                    className={selectedCategory === '全部' ? 'active' : ''}
+                    onClick={() => setSelectedCategory('全部')}
+                    style={selectedCategory === '全部' ? {
+                      background: tagConfig['全部']?.color,
+                      boxShadow: `0 2px 8px ${tagConfig['全部']?.borderColor}`
                     } : undefined}
                   >
-                    {cat}
+                    全部
                   </button>
-                ))}
+                  {tags.map(tag => (
+                    <button
+                      key={tag.id}
+                      className={selectedCategory === tag.name ? 'active' : ''}
+                      onClick={() => setSelectedCategory(tag.name)}
+                      style={selectedCategory === tag.name ? {
+                        background: tag.color,
+                        boxShadow: `0 2px 8px ${tag.borderColor}`
+                      } : undefined}
+                    >
+                      {tag.name}
+                    </button>
+                  ))}
+                </div>
+                <button className="tag-manage-btn" onClick={() => setShowTagManager(true)} title="管理标签">
+                  <Settings size={16} />
+                </button>
               </div>
 
               <div className="input-group">
@@ -938,13 +1277,13 @@ function App() {
 
               {showCategorySelect && (
                 <div className="category-select-popup">
-                  {CATEGORIES.filter(c => c !== '全部').map(cat => (
+                  {tags.map(tag => (
                     <button
-                      key={cat}
-                      className={selectedCategory === cat ? 'selected' : ''}
-                      onClick={() => { setSelectedCategory(cat); setShowCategorySelect(false) }}
+                      key={tag.id}
+                      className={selectedCategory === tag.name ? 'selected' : ''}
+                      onClick={() => { setSelectedCategory(tag.name); setShowCategorySelect(false) }}
                     >
-                      {cat}
+                      {tag.name}
                     </button>
                   ))}
                 </div>
@@ -978,7 +1317,7 @@ function App() {
                       ${dragOverTodoId === todo.id ? 'drag-over' : ''}
                       priority-${todo.priority || 'medium'}
                     `}
-                    style={{ '--category-color': CATEGORY_CONFIG[todo.category]?.color || '#8E8E93' } as React.CSSProperties}
+                    style={{ '--category-color': tagConfig[todo.category]?.color || '#8E8E93' } as React.CSSProperties}
                     draggable={editingTodoId !== todo.id}
                     onDragStart={(e) => handleDragStart(e, todo.id)}
                     onDragOver={(e) => handleDragOver(e, todo.id)}
@@ -1001,8 +1340,8 @@ function App() {
                         />
                         <div className="todo-edit-row">
                           <select value={editTodoCategory} onChange={(e) => setEditTodoCategory(e.target.value)} className="todo-edit-select">
-                            {CATEGORIES.filter(c => c !== '全部').map(cat => (
-                              <option key={cat} value={cat}>{cat}</option>
+                            {tags.map(tag => (
+                              <option key={tag.id} value={tag.name}>{tag.name}</option>
                             ))}
                           </select>
                           <select value={editTodoPriority} onChange={(e) => setEditTodoPriority(e.target.value as 'high' | 'medium' | 'low')} className="todo-edit-select">
@@ -1031,9 +1370,9 @@ function App() {
                             <span
                               className="todo-category"
                               style={{
-                                color: CATEGORY_CONFIG[todo.category]?.color,
-                                backgroundColor: CATEGORY_CONFIG[todo.category]?.bgColor,
-                                borderColor: CATEGORY_CONFIG[todo.category]?.borderColor
+                                color: tagConfig[todo.category]?.color,
+                                backgroundColor: tagConfig[todo.category]?.bgColor,
+                                borderColor: tagConfig[todo.category]?.borderColor
                               }}
                             >
                               {todo.category}
@@ -1154,7 +1493,7 @@ function App() {
                                 key={t.id}
                                 className="task-dot"
                                 style={{
-                                  backgroundColor: CATEGORY_CONFIG[t.category]?.color || '#8E8E93',
+                                  backgroundColor: tagConfig[t.category]?.color || '#8E8E93',
                                   opacity: t.completed ? 0.4 : 1,
                                   width: t.priority === 'high' ? '8px' : t.priority === 'low' ? '5px' : '6px',
                                   height: t.priority === 'high' ? '8px' : t.priority === 'low' ? '5px' : '6px'
@@ -1197,8 +1536,8 @@ function App() {
                         <span
                           className="calendar-task-category"
                           style={{
-                            color: CATEGORY_CONFIG[todo.category]?.color,
-                            backgroundColor: CATEGORY_CONFIG[todo.category]?.bgColor,
+                            color: tagConfig[todo.category]?.color,
+                            backgroundColor: tagConfig[todo.category]?.bgColor,
                           }}
                         >
                           {todo.category}
@@ -1237,7 +1576,7 @@ function App() {
                               >
                                 <span
                                   className="week-task-category-tag"
-                                  style={{ backgroundColor: CATEGORY_CONFIG[t.category]?.color || '#8E8E93' }}
+                                  style={{ backgroundColor: tagConfig[t.category]?.color || '#8E8E93' }}
                                 />
                                 <span className="week-task-name">{t.text}</span>
                               </div>
@@ -1362,6 +1701,103 @@ function App() {
       </main>
 
       {/* 撤销提示 */}
+      {/* 标签管理弹窗 */}
+      {showTagManager && (
+        <div className="modal-overlay" onClick={() => { setShowTagManager(false); setEditingTag(null) }}>
+          <div className="tag-manager-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="tag-manager-header">
+              <h3>管理标签</h3>
+              <button className="modal-close-btn" onClick={() => { setShowTagManager(false); setEditingTag(null) }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="tag-list">
+              {tags.map(tag => (
+                <div key={tag.id} className="tag-item">
+                  {editingTag?.id === tag.id ? (
+                    <div className="tag-edit-form">
+                      <input
+                        type="text"
+                        value={editingTag.name}
+                        onChange={(e) => setEditingTag({ ...editingTag, name: e.target.value })}
+                        className="tag-name-input"
+                        autoFocus
+                      />
+                      <div className="color-picker">
+                        {TAG_COLOR_PALETTE.map(c => (
+                          <button
+                            key={c}
+                            className={`color-option ${editingTag.color === c ? 'selected' : ''}`}
+                            style={{ backgroundColor: c }}
+                            onClick={() => setEditingTag({ ...editingTag, color: c })}
+                          />
+                        ))}
+                      </div>
+                      <div className="tag-edit-actions">
+                        <button className="cancel-btn" onClick={() => setEditingTag(null)}>取消</button>
+                        <button className="save-btn" onClick={() => updateTag(editingTag.id, { name: editingTag.name, color: editingTag.color })}>
+                          <Check size={14} /> 保存
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="tag-color-dot" style={{ backgroundColor: tag.color }} />
+                      <span className="tag-name">{tag.name}</span>
+                      <div className="tag-actions">
+                        <button className="tag-edit-btn" onClick={() => setEditingTag({ ...tag })} title="编辑">
+                          <Pencil size={14} />
+                        </button>
+                        {!tag.isDefault && (
+                          <button className="tag-delete-btn" onClick={() => deleteTag(tag.id)} title="删除">
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="tag-add-form">
+              <input
+                type="text"
+                placeholder="新标签名称"
+                value={newTagName}
+                onChange={(e) => setNewTagName(e.target.value)}
+                className="tag-name-input"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                    e.preventDefault()
+                    if (newTagName.trim()) addTag(newTagName, newTagColor)
+                  }
+                }}
+              />
+              <div className="color-picker">
+                {TAG_COLOR_PALETTE.map(c => (
+                  <button
+                    key={c}
+                    className={`color-option ${newTagColor === c ? 'selected' : ''}`}
+                    style={{ backgroundColor: c }}
+                    onClick={() => setNewTagColor(c)}
+                  />
+                ))}
+              </div>
+              <button
+                className="add-tag-btn"
+                onClick={() => addTag(newTagName, newTagColor)}
+                disabled={!newTagName.trim() || tags.some(t => t.name === newTagName.trim())}
+              >
+                <Plus size={16} /> 添加标签
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {undoStack.length > 0 && (
         <div className="undo-toast">
           <span className="undo-message">

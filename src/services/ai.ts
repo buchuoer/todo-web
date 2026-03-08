@@ -10,7 +10,7 @@ export const aiClient = new OpenAI({
  * 从文本中提取待办任务（高级版）
  * 支持自然语言日期、优先级检测、智能分类
  */
-export async function extractTodos(text: string) {
+export async function extractTodos(text: string, categories?: string[]) {
   const response = await aiClient.chat.completions.create({
     model: 'deepseek-chat',
     messages: [
@@ -27,11 +27,9 @@ export async function extractTodos(text: string) {
    - "下个月" → 下月15号
    - 如果没有明确时间，deadline 设为 null
 2. 所有日期格式为 YYYY-MM-DD
-3. 根据任务内容智能分类：工作、学习、生活
-   - 学习：课程、作业、考试、读书、科研、论文、复习
-   - 工作：实习、项目、开会、报告、汇报、需求、上线
-   - 生活：吃饭、购物、运动、娱乐、旅行、打扫、看病
-4. 返回 JSON 数组：[{"text": "任务描述", "deadline": "2024-01-15", "category": "学习"}, ...]
+3. 根据任务内容智能分类：${categories ? categories.join('、') : '工作、学习、生活'}
+   - 根据任务内容的关键词进行智能分类
+4. 返回 JSON 数组：[{"text": "任务描述", "deadline": "2024-01-15", "category": "${categories ? categories[0] : '学习'}"}, ...]
 5. 只返回 JSON，不要任何解释文字
 6. 任务描述应简洁清晰，去除口语化表达
 
