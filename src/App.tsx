@@ -1622,7 +1622,7 @@ function App() {
                   {Array.from({ length: getMonthDays(calendarYear, calendarMonth) }).map((_, i) => {
                     const day = i + 1
                     const dateStr = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                    const dayTodos = todos.filter(t => t.deadline === dateStr)
+                    const dayTodos = todos.filter(t => t.deadline?.split(' ')[0] === dateStr)
                     const isToday = dateStr === getToday()
                     const isSelected = dateStr === selectedCalendarDate
 
@@ -1671,10 +1671,10 @@ function App() {
                     <span>{selectedCalendarDate.replace(/^(\d+)-(\d+)-(\d+)$/, (_m, _y, mo, d) => `${parseInt(mo)}月${parseInt(d)}日`)} 的任务</span>
                     <button onClick={() => setSelectedCalendarDate(null)}><X size={16} /></button>
                   </div>
-                  {todos.filter(t => t.deadline === selectedCalendarDate).length === 0 ? (
+                  {todos.filter(t => t.deadline?.split(' ')[0] === selectedCalendarDate).length === 0 ? (
                     <div className="calendar-task-empty">暂无任务</div>
                   ) : (
-                    todos.filter(t => t.deadline === selectedCalendarDate).map(todo => (
+                    todos.filter(t => t.deadline?.split(' ')[0] === selectedCalendarDate).map(todo => (
                       <div key={todo.id} className={`calendar-task-item ${todo.completed ? 'completed' : ''}`}>
                         <button className="check-btn" onClick={() => toggleTodo(todo.id)}>
                           {todo.completed ? <CheckCircle2 size={20} color="#34C759" /> : <Circle size={20} />}
@@ -1700,7 +1700,7 @@ function App() {
                   <div className="calendar-week-grid">
                     {getWeekDays(calendarWeekStart).map((date, i) => {
                       const dateStr = formatDate(date)
-                      const dayTodos = todos.filter(t => t.deadline === dateStr)
+                      const dayTodos = todos.filter(t => t.deadline?.split(' ')[0] === dateStr)
                       const isToday = dateStr === getToday()
                       const isSelected = dateStr === selectedCalendarDate
 
