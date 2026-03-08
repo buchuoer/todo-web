@@ -67,6 +67,8 @@ body {
   margin: 0 auto;
   padding: 40px 20px;
   min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
   box-sizing: border-box;
 }
 
@@ -1182,7 +1184,7 @@ input:focus, textarea:focus {
 .logs-section {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 200px);
+  height: calc(100dvh - 200px);
   min-height: 400px;
 }
 
@@ -1522,7 +1524,7 @@ input:focus, textarea:focus {
 @media (max-width: 600px) {
   .app-container {
     padding-top: 24px;
-    padding-bottom: 100px;
+    padding-bottom: calc(100px + env(safe-area-inset-bottom));
   }
   .tab-switcher { display: none; }
   .mobile-nav { display: flex; }
@@ -2133,6 +2135,8 @@ button:active::after {
 /* === 认证页面 === */
 .auth-container {
   min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
   display: flex;
   align-items: center;
   justify-content: center;

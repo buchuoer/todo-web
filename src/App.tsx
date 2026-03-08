@@ -432,10 +432,13 @@ function App() {
         } else if (remoteTodos.length > 0) {
           // 云端有数据：拉取覆盖本地
           isRemoteUpdate.current = true
+          if (syncTodosTimer.current) clearTimeout(syncTodosTimer.current)
+          if (syncLogsTimer.current) clearTimeout(syncLogsTimer.current)
+          if (syncTagsTimer.current) clearTimeout(syncTagsTimer.current)
           setTodos(remoteTodos)
           setLogs(remoteLogs)
           if (remoteTags.length > 0) setTags(remoteTags)
-          setTimeout(() => { isRemoteUpdate.current = false }, 200)
+          setTimeout(() => { isRemoteUpdate.current = false }, 1000)
         }
         if (!cancelled) setSyncStatus('synced')
       } catch (err) {
@@ -449,20 +452,23 @@ function App() {
     // 实时订阅
     const todosChannel = subscribeTodos(user.id, (newTodos) => {
       isRemoteUpdate.current = true
+      if (syncTodosTimer.current) clearTimeout(syncTodosTimer.current)
       setTodos(newTodos)
-      setTimeout(() => { isRemoteUpdate.current = false }, 200)
+      setTimeout(() => { isRemoteUpdate.current = false }, 1000)
     })
     const logsChannel = subscribeLogs(user.id, (newLogs) => {
       isRemoteUpdate.current = true
+      if (syncLogsTimer.current) clearTimeout(syncLogsTimer.current)
       setLogs(newLogs)
-      setTimeout(() => { isRemoteUpdate.current = false }, 200)
+      setTimeout(() => { isRemoteUpdate.current = false }, 1000)
     })
     let tagsChannel: ReturnType<typeof subscribeTags> | null = null
     try {
       tagsChannel = subscribeTags(user.id, (newTags) => {
         isRemoteUpdate.current = true
+        if (syncTagsTimer.current) clearTimeout(syncTagsTimer.current)
         setTags(newTags.length > 0 ? newTags : DEFAULT_TAGS)
-        setTimeout(() => { isRemoteUpdate.current = false }, 200)
+        setTimeout(() => { isRemoteUpdate.current = false }, 1000)
       })
     } catch {}
 
@@ -479,10 +485,15 @@ function App() {
   useEffect(() => {
     const handleOnline = () => {
       if (user) {
+        isRemoteUpdate.current = true
+        if (syncTodosTimer.current) clearTimeout(syncTodosTimer.current)
+        if (syncLogsTimer.current) clearTimeout(syncLogsTimer.current)
+        if (syncTagsTimer.current) clearTimeout(syncTagsTimer.current)
         setSyncStatus('syncing')
         Promise.all([pushTodos(todos, user.id), pushLogs(logs, user.id)])
           .then(() => setSyncStatus('synced'))
           .catch(() => setSyncStatus('error'))
+          .finally(() => { setTimeout(() => { isRemoteUpdate.current = false }, 1000) })
         pushTags(tags, user.id).catch(() => {})
       }
     }

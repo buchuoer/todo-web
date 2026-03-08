@@ -131,31 +131,54 @@ function rowToTag(row: TagRow): Tag {
   }
 }
 
+// ---- Push locks (prevent Realtime echo during delete+insert) ----
+let pushingTodos = false
+let pushingLogs = false
+let pushingTags = false
+
+export function isPushingTodos() { return pushingTodos }
+export function isPushingLogs() { return pushingLogs }
+export function isPushingTags() { return pushingTags }
+
 // ---- Push (local → cloud) ----
 
 export async function pushTodos(todos: Todo[], userId: string) {
-  // Delete all existing, then insert fresh (simple full-sync for personal use)
-  await supabase.from('todos').delete().eq('user_id', userId)
-  if (todos.length === 0) return
-  const rows = todos.map(t => todoToRow(t, userId))
-  const { error } = await supabase.from('todos').insert(rows)
-  if (error) throw error
+  pushingTodos = true
+  try {
+    await supabase.from('todos').delete().eq('user_id', userId)
+    if (todos.length === 0) return
+    const rows = todos.map(t => todoToRow(t, userId))
+    const { error } = await supabase.from('todos').insert(rows)
+    if (error) throw error
+  } finally {
+    setTimeout(() => { pushingTodos = false }, 500)
+  }
 }
 
 export async function pushLogs(logs: LogEntry[], userId: string) {
-  await supabase.from('logs').delete().eq('user_id', userId)
-  if (logs.length === 0) return
-  const rows = logs.map(l => logToRow(l, userId))
-  const { error } = await supabase.from('logs').insert(rows)
-  if (error) throw error
+  pushingLogs = true
+  try {
+    await supabase.from('logs').delete().eq('user_id', userId)
+    if (logs.length === 0) return
+    const rows = logs.map(l => logToRow(l, userId))
+    const { error } = await supabase.from('logs').insert(rows)
+    if (error) throw error
+  } finally {
+    setTimeout(() => { pushingLogs = false }, 500)
+  }
 }
 
 export async function pushTags(tags: Tag[], userId: string) {
-  await supabase.from('tags').delete().eq('user_id', userId)
-  if (tags.length === 0) return
-  const rows = tags.map(t => tagToRow(t, userId))
-  const { error } = await supabase.from('tags').insert(rows)
-  if (error) throw error
+  pushingTags = true
+  try {
+    await supabase.from('tags').delete().eq('user_id', userId)
+    if (tags.length === 0) return
+    const rows = tags.map(t => tagToRow(t, userId))
+    const { error } = await supabase.from('tags').insert(rows)
+    if (error) throw error
+  } finally {
+    setTimeout(() => { pushingTags = false }, 500)
+  }
 }
 
 // ---- Pull (cloud → local) ----
@@ -202,7 +225,7 @@ export function subscribeTodos(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'todos', filter: `user_id=eq.${userId}` },
       async () => {
-        // On any change, refetch to get consistent state
+        if (pushingTodos) return // 推送期间忽略回流
         const todos = await fetchTodos(userId)
         callback(todos)
       },
@@ -220,6 +243,7 @@ export function subscribeLogs(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'logs', filter: `user_id=eq.${userId}` },
       async () => {
+        if (pushingLogs) return // 推送期间忽略回流
         const logs = await fetchLogs(userId)
         callback(logs)
       },
@@ -237,6 +261,7 @@ export function subscribeTags(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'tags', filter: `user_id=eq.${userId}` },
       async () => {
+        if (pushingTags) return // 推送期间忽略回流
         const tags = await fetchTags(userId)
         callback(tags)
       },
