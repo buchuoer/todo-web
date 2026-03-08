@@ -69,7 +69,8 @@ const MIN_LOG_LENGTH = 5
 const getDaysLeft = (deadline: string): number => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  const deadlineDate = new Date(deadline)
+  const datePart = deadline.split(' ')[0]
+  const deadlineDate = new Date(datePart)
   deadlineDate.setHours(0, 0, 0, 0)
   return Math.ceil((deadlineDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 }
@@ -99,9 +100,10 @@ const formatWeekRange = (startDate: Date): string => {
 const getDeadlineInfo = (deadline: string, completed: boolean) => {
   if (completed) return { text: '已完成', className: 'deadline-done' }
   const daysLeft = getDaysLeft(deadline)
+  const timePart = deadline.includes(' ') ? deadline.split(' ')[1] : ''
   if (daysLeft < 0) return { text: `已过期 ${Math.abs(daysLeft)} 天`, className: 'deadline-overdue' }
-  if (daysLeft === 0) return { text: '今天到期', className: 'deadline-today' }
-  if (daysLeft === 1) return { text: '明天到期', className: 'deadline-tomorrow' }
+  if (daysLeft === 0) return { text: timePart ? `今天 ${timePart} 到期` : '今天到期', className: 'deadline-today' }
+  if (daysLeft === 1) return { text: timePart ? `明天 ${timePart} 到期` : '明天到期', className: 'deadline-tomorrow' }
   if (daysLeft <= 3) return { text: `${daysLeft} 天后到期`, className: 'deadline-soon' }
   return { text: `${daysLeft} 天后到期`, className: 'deadline-normal' }
 }
@@ -192,7 +194,7 @@ function App() {
   })
   const [activeTab, setActiveTab] = useState<'todo' | 'logs' | 'calendar'>('todo')
   const [isAiLoading, setIsAiLoading] = useState(false)
-  const [selectedCategory, setSelectedCategory] = useState('生活')
+  const [selectedCategory, setSelectedCategory] = useState('全部')
   const [showCategorySelect, setShowCategorySelect] = useState(false)
   const [selectedPriority, setSelectedPriority] = useState<'high' | 'medium' | 'low'>('medium')
   const [showPrioritySelect, setShowPrioritySelect] = useState(false)
@@ -200,6 +202,10 @@ function App() {
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [pickerYear, setPickerYear] = useState(new Date().getFullYear())
   const [pickerMonth, setPickerMonth] = useState(new Date().getMonth())
+  const [pickerHour, setPickerHour] = useState(9)
+  const [pickerMinute, setPickerMinute] = useState(0)
+  const [deadlineTimeEnabled, setDeadlineTimeEnabled] = useState(false)
+  const [editTodoTime, setEditTodoTime] = useState('')
 
   // 标签管理状态
   const [showTagManager, setShowTagManager] = useState(false)
@@ -734,6 +740,9 @@ function App() {
     setShowPrioritySelect(false)
     setDeadline('')
     setSelectedPriority('medium')
+    setDeadlineTimeEnabled(false)
+    setPickerHour(9)
+    setPickerMinute(0)
   }
 
   const toggleTodo = (id: number) => {
@@ -774,21 +783,32 @@ function App() {
     setEditingTodoId(todo.id)
     setEditTodoText(todo.text)
     setEditTodoCategory(todo.category)
-    setEditTodoDeadline(todo.deadline || '')
+    if (todo.deadline && todo.deadline.includes(' ')) {
+      const [datePart, timePart] = todo.deadline.split(' ')
+      setEditTodoDeadline(datePart)
+      setEditTodoTime(timePart)
+    } else {
+      setEditTodoDeadline(todo.deadline || '')
+      setEditTodoTime('')
+    }
     setEditTodoPriority(todo.priority || 'medium')
   }
 
   const saveEditTodo = () => {
     if (!canEdit) return
     if (!editTodoText.trim() || editingTodoId === null) return
+    const mergedDeadline = editTodoDeadline
+      ? (editTodoTime ? `${editTodoDeadline} ${editTodoTime}` : editTodoDeadline)
+      : undefined
     setTodos(prev => prev.map(t =>
       t.id === editingTodoId
-        ? { ...t, text: editTodoText.trim(), category: editTodoCategory, deadline: editTodoDeadline || undefined, priority: editTodoPriority }
+        ? { ...t, text: editTodoText.trim(), category: editTodoCategory, deadline: mergedDeadline, priority: editTodoPriority }
         : t
     ))
     setEditingTodoId(null)
     setEditTodoText('')
     setEditTodoDeadline('')
+    setEditTodoTime('')
     setEditTodoPriority('medium')
   }
 
@@ -796,6 +816,7 @@ function App() {
     setEditingTodoId(null)
     setEditTodoText('')
     setEditTodoDeadline('')
+    setEditTodoTime('')
     setEditTodoPriority('medium')
   }
 
@@ -1288,7 +1309,22 @@ function App() {
               </div>
 
               <div className="deadline-picker-row">
-                <button className={`deadline-trigger ${deadline ? 'active' : ''}`} onClick={() => setShowDatePicker(!showDatePicker)}>
+                <button className={`deadline-trigger ${deadline ? 'active' : ''}`} onClick={() => {
+                  if (!showDatePicker) {
+                    if (deadline && deadline.includes(' ')) {
+                      const [, time] = deadline.split(' ')
+                      const [h, m] = time.split(':').map(Number)
+                      setPickerHour(h)
+                      setPickerMinute(m)
+                      setDeadlineTimeEnabled(true)
+                    } else {
+                      setDeadlineTimeEnabled(false)
+                      setPickerHour(9)
+                      setPickerMinute(0)
+                    }
+                  }
+                  setShowDatePicker(!showDatePicker)
+                }}>
                   <Calendar size={16} />
                   {deadline ? deadline : '设置截止日期'}
                 </button>
@@ -1315,16 +1351,72 @@ function App() {
                     {Array.from({ length: getMonthDays(pickerYear, pickerMonth) }).map((_, i) => {
                       const day = i + 1
                       const dateStr = `${pickerYear}-${String(pickerMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+                      const selectedDatePart = deadline.split(' ')[0]
                       return (
                         <button
                           key={day}
-                          className={`day ${deadline === dateStr ? 'selected' : ''} ${dateStr === getToday() ? 'today' : ''}`}
-                          onClick={() => { setDeadline(dateStr); setShowDatePicker(false) }}
+                          className={`day ${selectedDatePart === dateStr ? 'selected' : ''} ${dateStr === getToday() ? 'today' : ''}`}
+                          onClick={() => {
+                            const timeStr = deadlineTimeEnabled ? ` ${String(pickerHour).padStart(2, '0')}:${String(pickerMinute).padStart(2, '0')}` : ''
+                            setDeadline(dateStr + timeStr)
+                          }}
                         >
                           {day}
                         </button>
                       )
                     })}
+                  </div>
+                  <div className="picker-time-toggle">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={deadlineTimeEnabled}
+                        onChange={(e) => {
+                          setDeadlineTimeEnabled(e.target.checked)
+                          if (deadline) {
+                            const datePart = deadline.split(' ')[0]
+                            if (e.target.checked) {
+                              setDeadline(`${datePart} ${String(pickerHour).padStart(2, '0')}:${String(pickerMinute).padStart(2, '0')}`)
+                            } else {
+                              setDeadline(datePart)
+                            }
+                          }
+                        }}
+                      />
+                      设置时间
+                    </label>
+                  </div>
+                  {deadlineTimeEnabled && (
+                    <div className="picker-time-select">
+                      <select value={pickerHour} onChange={(e) => {
+                        const h = Number(e.target.value)
+                        setPickerHour(h)
+                        if (deadline) {
+                          const datePart = deadline.split(' ')[0]
+                          setDeadline(`${datePart} ${String(h).padStart(2, '0')}:${String(pickerMinute).padStart(2, '0')}`)
+                        }
+                      }}>
+                        {Array.from({ length: 24 }, (_, i) => (
+                          <option key={i} value={i}>{String(i).padStart(2, '0')}时</option>
+                        ))}
+                      </select>
+                      <span>:</span>
+                      <select value={pickerMinute} onChange={(e) => {
+                        const m = Number(e.target.value)
+                        setPickerMinute(m)
+                        if (deadline) {
+                          const datePart = deadline.split(' ')[0]
+                          setDeadline(`${datePart} ${String(pickerHour).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+                        }
+                      }}>
+                        {Array.from({ length: 12 }, (_, i) => i * 5).map(m => (
+                          <option key={m} value={m}>{String(m).padStart(2, '0')}分</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="picker-actions">
+                    <button className="picker-confirm" onClick={() => setShowDatePicker(false)}>确认</button>
                   </div>
                 </div>
               )}
@@ -1404,6 +1496,7 @@ function App() {
                             ))}
                           </select>
                           <input type="date" value={editTodoDeadline} onChange={(e) => setEditTodoDeadline(e.target.value)} className="todo-edit-date" />
+                          <input type="time" value={editTodoTime} onChange={(e) => setEditTodoTime(e.target.value)} className="todo-edit-date" placeholder="时间" />
                           <div className="todo-edit-actions">
                             <button onClick={cancelEditTodo} className="cancel-btn">取消</button>
                             <button onClick={saveEditTodo} className="save-btn"><Check size={14} /> 保存</button>

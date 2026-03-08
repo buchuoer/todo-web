@@ -498,6 +498,75 @@ input:focus, textarea:focus {
   color: white;
 }
 
+.picker-time-toggle {
+  display: flex;
+  align-items: center;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.picker-time-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.picker-time-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.picker-time-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.picker-time-select select {
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--input-bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.picker-time-select span {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.picker-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.picker-confirm {
+  padding: 8px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  background: var(--primary);
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.picker-confirm:hover {
+  filter: brightness(1.1);
+}
+
 /* === 分类选择弹窗 === */
 .category-select-popup {
   background: var(--card);
