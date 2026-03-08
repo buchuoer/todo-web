@@ -80,7 +80,7 @@ function todoToRow(todo: Todo, userId: string): Omit<TodoRow, 'id' | 'created_at
 
 function rowToTodo(row: TodoRow): Todo {
   return {
-    id: row["order"] || Date.now(),
+    id: row["order"] ?? Date.now(),
     text: row.text,
     completed: row.completed,
     category: row.category,
@@ -190,7 +190,13 @@ export async function fetchTodos(userId: string): Promise<Todo[]> {
     .eq('user_id', userId)
     .order('order', { ascending: true })
   if (error) throw error
-  return (data as TodoRow[]).map(rowToTodo)
+  const rawTodos = (data as TodoRow[]).map(rowToTodo)
+  const seen = new Set<number>()
+  return rawTodos.filter(todo => {
+    if (seen.has(todo.id)) return false
+    seen.add(todo.id)
+    return true
+  })
 }
 
 export async function fetchLogs(userId: string): Promise<LogEntry[]> {
@@ -200,7 +206,13 @@ export async function fetchLogs(userId: string): Promise<LogEntry[]> {
     .eq('user_id', userId)
     .order('created_at', { ascending: true })
   if (error) throw error
-  return (data as LogRow[]).map(rowToLog)
+  const rawLogs = (data as LogRow[]).map(rowToLog)
+  const seen = new Set<number>()
+  return rawLogs.filter(log => {
+    if (seen.has(log.id)) return false
+    seen.add(log.id)
+    return true
+  })
 }
 
 export async function fetchTags(userId: string): Promise<Tag[]> {
@@ -210,7 +222,13 @@ export async function fetchTags(userId: string): Promise<Tag[]> {
     .eq('user_id', userId)
     .order('created_at', { ascending: true })
   if (error) throw error
-  return (data as TagRow[]).map(rowToTag)
+  const rawTags = (data as TagRow[]).map(rowToTag)
+  const seen = new Set<string>()
+  return rawTags.filter(tag => {
+    if (seen.has(tag.name)) return false
+    seen.add(tag.name)
+    return true
+  })
 }
 
 // ---- Realtime subscriptions ----

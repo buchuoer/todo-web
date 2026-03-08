@@ -164,7 +164,13 @@ function App() {
         { id: 2, text: '完成待办工具原型设计', completed: true, category: '工作' },
       ]
       // 兼容旧数据：缺少 priority 字段默认为 'medium'
-      return parsed.map((t: any) => ({ ...t, priority: t.priority || 'medium' }))
+      const mapped = parsed.map((t: any) => ({ ...t, priority: t.priority || 'medium' }))
+      const seen = new Set<number>()
+      return mapped.filter((t: Todo) => {
+        if (seen.has(t.id)) return false
+        seen.add(t.id)
+        return true
+      })
     } catch {
       return [
         { id: 1, text: '学习 React Hooks', completed: false, category: '学习', priority: 'medium' },
@@ -175,7 +181,13 @@ function App() {
   const [tags, setTags] = useState<Tag[]>(() => {
     try {
       const saved = localStorage.getItem(TAGS_STORAGE_KEY)
-      return saved ? JSON.parse(saved) : DEFAULT_TAGS
+      const loaded: Tag[] = saved ? JSON.parse(saved) : DEFAULT_TAGS
+      const seen = new Set<string>()
+      return loaded.filter(t => {
+        if (seen.has(t.name)) return false
+        seen.add(t.name)
+        return true
+      })
     } catch { return DEFAULT_TAGS }
   })
   const [activeTab, setActiveTab] = useState<'todo' | 'logs' | 'calendar'>('todo')
@@ -413,8 +425,11 @@ function App() {
     if (!user) return
 
     let cancelled = false
+    let initialized = false
 
     const initSync = async () => {
+      if (initialized) return
+      initialized = true
       setSyncStatus('syncing')
       try {
         const remoteTodos = await fetchTodos(user.id)
