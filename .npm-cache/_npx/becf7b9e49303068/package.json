@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.71"
+  },
+  "_npx": {
+    "packages": [
+      "@anthropic-ai/claude-code"
+    ]
+  }
+}

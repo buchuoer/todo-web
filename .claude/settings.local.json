@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(/tmp/phase2-summary.txt:*)",
+      "Read(//tmp/**)",
+      "Bash(npx tsc --noEmit 2>&1 | head -50)",
+      "Bash(npx vite build 2>&1 | tail -20)"
+    ]
+  }
+}
