@@ -254,6 +254,9 @@ function App() {
   // 数据统计
   const [showStats, setShowStats] = useState(false)
 
+  // 离线编辑保护：已登录 + 离线/同步失败时禁止编辑
+  const canEdit = !user || (syncStatus !== 'offline' && syncStatus !== 'error')
+
   // 日历视图
   const [calendarYear, setCalendarYear] = useState(new Date().getFullYear())
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth())
@@ -290,6 +293,7 @@ function App() {
 
   // === 标签管理函数 ===
   const addTag = (name: string, color: string) => {
+    if (!canEdit) return
     if (!name.trim() || tags.some(t => t.name === name.trim())) return
     const { bgColor, borderColor } = deriveTagColors(color)
     const tag: Tag = {
@@ -307,6 +311,7 @@ function App() {
   }
 
   const updateTag = (id: string, updates: { name?: string; color?: string }) => {
+    if (!canEdit) return
     setTags(prev => prev.map(tag => {
       if (tag.id !== id) return tag
       const newColor = updates.color || tag.color
@@ -324,6 +329,7 @@ function App() {
   }
 
   const deleteTag = (id: string) => {
+    if (!canEdit) return
     const tag = tags.find(t => t.id === id)
     if (!tag || tag.isDefault) return
     // 关联 todo 归入"生活"
@@ -498,18 +504,27 @@ function App() {
 
   // === 在线/离线检测 ===
   useEffect(() => {
-    const handleOnline = () => {
-      if (user) {
-        isRemoteUpdate.current = true
-        if (syncTodosTimer.current) clearTimeout(syncTodosTimer.current)
-        if (syncLogsTimer.current) clearTimeout(syncLogsTimer.current)
-        if (syncTagsTimer.current) clearTimeout(syncTagsTimer.current)
-        setSyncStatus('syncing')
-        Promise.all([pushTodos(todos, user.id), pushLogs(logs, user.id)])
-          .then(() => setSyncStatus('synced'))
-          .catch(() => setSyncStatus('error'))
-          .finally(() => { setTimeout(() => { isRemoteUpdate.current = false }, 1000) })
-        pushTags(tags, user.id).catch(() => {})
+    const handleOnline = async () => {
+      if (!user) return
+      isRemoteUpdate.current = true
+      if (syncTodosTimer.current) clearTimeout(syncTodosTimer.current)
+      if (syncLogsTimer.current) clearTimeout(syncLogsTimer.current)
+      if (syncTagsTimer.current) clearTimeout(syncTagsTimer.current)
+      setSyncStatus('syncing')
+      try {
+        const [remoteTodos, remoteLogs] = await Promise.all([
+          fetchTodos(user.id), fetchLogs(user.id)
+        ])
+        let remoteTags: Tag[] = []
+        try { remoteTags = await fetchTags(user.id) } catch {}
+        setTodos(remoteTodos)
+        setLogs(remoteLogs)
+        if (remoteTags.length > 0) setTags(remoteTags)
+        setSyncStatus('synced')
+      } catch {
+        setSyncStatus('error')
+      } finally {
+        setTimeout(() => { isRemoteUpdate.current = false }, 1000)
       }
     }
     const handleOffline = () => setSyncStatus('offline')
@@ -593,6 +608,7 @@ function App() {
 
   // === 日志操作 ===
   const addLog = (type: LogEntry['type'], content: string) => {
+    if (!canEdit) return
     if (!content.trim()) return
     setLogs(prev => [...prev, {
       id: Math.floor(Date.now() * 1000 + Math.random() * 1000), type, content: content.trim(),
@@ -600,7 +616,10 @@ function App() {
     }])
   }
 
-  const deleteLog = (id: number) => setLogs(prev => prev.filter(l => l.id !== id))
+  const deleteLog = (id: number) => {
+    if (!canEdit) return
+    setLogs(prev => prev.filter(l => l.id !== id))
+  }
 
   const startEditLog = (id: number, content: string) => {
     setEditingLogId(id)
@@ -608,6 +627,7 @@ function App() {
   }
 
   const saveEditLog = () => {
+    if (!canEdit) return
     if (editingLogId === null || !editContent.trim()) return
     setLogs(prev => prev.map(l => l.id === editingLogId ? { ...l, content: editContent.trim() } : l))
     setEditingLogId(null)
@@ -706,6 +726,7 @@ function App() {
     .sort((a, b) => (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1))
 
   const addTodo = (text: string, category: string = '生活', deadlineVal?: string, priorityVal: 'high' | 'medium' | 'low' = 'medium') => {
+    if (!canEdit) return
     if (!text.trim()) return
     setTodos(prev => [{ id: Math.floor(Date.now() * 1000 + Math.random() * 1000), text, completed: false, category, deadline: deadlineVal, priority: priorityVal }, ...prev])
     setInput('')
@@ -716,6 +737,7 @@ function App() {
   }
 
   const toggleTodo = (id: number) => {
+    if (!canEdit) return
     const todo = todos.find(t => t.id === id)
     if (todo) {
       setUndoStack(prev => [...prev, { type: 'toggle', todo: { ...todo }, timestamp: Date.now() }])
@@ -724,6 +746,7 @@ function App() {
   }
 
   const deleteTodo = (id: number) => {
+    if (!canEdit) return
     const todo = todos.find(t => t.id === id)
     if (todo) {
       setRemovingTodoId(id)
@@ -736,6 +759,7 @@ function App() {
   }
 
   const handleUndo = () => {
+    if (!canEdit) return
     if (undoStack.length === 0) return
     const action = undoStack[undoStack.length - 1]
     if (action.type === 'delete') {
@@ -755,6 +779,7 @@ function App() {
   }
 
   const saveEditTodo = () => {
+    if (!canEdit) return
     if (!editTodoText.trim() || editingTodoId === null) return
     setTodos(prev => prev.map(t =>
       t.id === editingTodoId
@@ -795,6 +820,7 @@ function App() {
   }
 
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canEdit) return
     const file = e.target.files?.[0]
     if (!file) return
     const reader = new FileReader()
@@ -850,6 +876,7 @@ function App() {
 
   const handleDrop = (e: React.DragEvent, id: number) => {
     e.preventDefault()
+    if (!canEdit) return
     if (dragTodoId !== null && id !== dragTodoId) {
       setTodos(prev => {
         const newTodos = [...prev]
@@ -1212,6 +1239,7 @@ function App() {
                   placeholder="添加任务或让 AI 提取待办..."
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  disabled={!canEdit}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       if (e.nativeEvent.isComposing || e.keyCode === 229) return
@@ -1226,7 +1254,7 @@ function App() {
                 <button
                   className={`ai-extract-btn ${isAiLoading ? 'loading' : ''}`}
                   onClick={handleAiExtract}
-                  disabled={isAiLoading || !input.trim()}
+                  disabled={!canEdit || isAiLoading || !input.trim()}
                   title="AI 智能提取待办"
                 >
                   {isAiLoading ? <Loader2 className="animate-spin" size={20} /> : <Sparkles size={20} />}
@@ -1252,8 +1280,8 @@ function App() {
                 </button>
                 <button
                   onClick={() => addTodo(input, selectedCategory === '全部' ? '生活' : selectedCategory, deadline || undefined, selectedPriority)}
-                  disabled={!input.trim()}
-                  className={input.trim() ? 'active' : ''}
+                  disabled={!canEdit || !input.trim()}
+                  className={input.trim() && canEdit ? 'active' : ''}
                 >
                   <Plus size={20} />
                 </button>
@@ -1632,7 +1660,7 @@ function App() {
                     {logs.length > 0 && (
                       <button
                         className="clear-history-btn"
-                        onClick={() => { if (confirm('确定要清除所有日志吗？此操作不可恢复。')) setLogs([]) }}
+                        onClick={() => { if (canEdit && confirm('确定要清除所有日志吗？此操作不可恢复。')) setLogs([]) }}
                         title="清除所有日志"
                       >
                         <Trash2 size={16} /> 清除历史
@@ -1645,7 +1673,7 @@ function App() {
                     value={logInput}
                     onChange={(e) => setLogInput(e.target.value)}
                     onKeyDown={handleLogKeyDown}
-                    disabled={isLogAiLoading}
+                    disabled={!canEdit || isLogAiLoading}
                     rows={4}
                   />
                   <div className="log-actions">
@@ -1666,7 +1694,7 @@ function App() {
                       <button
                         className={`log-send-btn ${isLogAiLoading ? 'loading' : ''}`}
                         onClick={() => logInput.trim().startsWith('@AI') ? handleAiChat() : handleLogSubmit()}
-                        disabled={!logInput.trim() || isLogAiLoading}
+                        disabled={!canEdit || !logInput.trim() || isLogAiLoading}
                       >
                         {isLogAiLoading ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
                       </button>
