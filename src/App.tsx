@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   Plus, CheckCircle2, Circle, CheckSquare, Sparkles, Loader2, Trash2,
-  FolderOpen, Calendar, BookOpen, Send, User, Bot, Bold, Italic, List,
+  FolderOpen, Calendar, BookOpen, Send, User, Bot, Bold, Italic, List, Search,
   Check, Moon, Sun, BarChart3, GripVertical, X, Undo2, Bell, ChevronLeft, ChevronRight,
   Download, Upload, LogOut, RefreshCw, WifiOff, Cloud, Settings, Pencil
 } from 'lucide-react'
@@ -64,6 +64,18 @@ const LOG_DRAFT_KEY = 'minimus-log-draft'
 const DARK_MODE_KEY = 'minimus-dark-mode'
 const NOTIFICATION_SETTINGS_KEY = 'minimus-notification-settings'
 const MIN_LOG_LENGTH = 5
+const BACKUP_SCHEMA_VERSION = 2
+
+const generateTodoId = () => Math.floor(Date.now() * 1000 + Math.random() * 1000)
+
+const isValidHexColor = (value: string) => /^#[0-9A-Fa-f]{6}$/.test(value)
+
+const normalizeDeadline = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  return /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/.test(trimmed) ? trimmed : undefined
+}
 
 // 计算剩余天数
 const getDaysLeft = (deadline: string): number => {
@@ -77,6 +89,18 @@ const getDaysLeft = (deadline: string): number => {
 
 const formatDate = (date: Date): string => date.toISOString().split('T')[0]
 const getToday = (): string => formatDate(new Date())
+const getDateWithOffset = (days: number): string => formatDate(new Date(Date.now() + days * 86400000))
+const getWeekRangeMonday = (): { start: string; end: string } => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const day = today.getDay()
+  const diff = day === 0 ? 6 : day - 1
+  const start = new Date(today)
+  start.setDate(today.getDate() - diff)
+  const end = new Date(start)
+  end.setDate(start.getDate() + 6)
+  return { start: formatDate(start), end: formatDate(end) }
+}
 
 const getMonthDays = (year: number, month: number) => new Date(year, month + 1, 0).getDate()
 const getFirstDayOfMonth = (year: number, month: number) => new Date(year, month, 1).getDay()
@@ -122,6 +146,7 @@ const deriveTagColors = (hex: string) => {
 }
 
 const DEFAULT_TAGS: Tag[] = [
+  { id: 'default-uncategorized', name: '未分类', color: '#8E8E93', ...deriveTagColors('#8E8E93'), isDefault: true, createdAt: '2024-01-01T00:00:00.000Z' },
   { id: 'default-work', name: '工作', color: '#007AFF', ...deriveTagColors('#007AFF'), isDefault: true, createdAt: '2024-01-01T00:00:00.000Z' },
   { id: 'default-study', name: '学习', color: '#34C759', ...deriveTagColors('#34C759'), isDefault: true, createdAt: '2024-01-01T00:00:01.000Z' },
   { id: 'default-life', name: '生活', color: '#FF9500', ...deriveTagColors('#FF9500'), isDefault: true, createdAt: '2024-01-01T00:00:02.000Z' },
@@ -139,7 +164,8 @@ const EMPTY_STATE_CONFIG: Record<string, { icon: string; title: string; hint: st
   '全部': { icon: '📋', title: '暂无待办事项', hint: '在上方输入框添加你的第一个待办' },
   '工作': { icon: '💼', title: '暂无工作待办', hint: '添加工作相关的任务开始吧' },
   '学习': { icon: '📚', title: '暂无学习待办', hint: '添加一个学习目标开始吧' },
-  '生活': { icon: '🌟', title: '暂无生活待办', hint: '记录生活中的待办事项' }
+  '生活': { icon: '🌟', title: '暂无生活待办', hint: '记录生活中的待办事项' },
+  '未分类': { icon: '🗂️', title: '暂无未分类待办', hint: '这里会存放未指定分类的任务' }
 }
 
 function App() {
@@ -198,6 +224,13 @@ function App() {
   const [showCategorySelect, setShowCategorySelect] = useState(false)
   const [selectedPriority, setSelectedPriority] = useState<'high' | 'medium' | 'low'>('medium')
   const [showPrioritySelect, setShowPrioritySelect] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'completed' | 'overdue' | 'today' | 'tomorrow' | 'week' | 'next7' | 'no-date'>('all')
+  const [hideCompleted, setHideCompleted] = useState(false)
+  const [isBatchMode, setIsBatchMode] = useState(false)
+  const [selectedTodoIds, setSelectedTodoIds] = useState<number[]>([])
+  const [batchCategory, setBatchCategory] = useState('')
+  const [batchPriority, setBatchPriority] = useState('')
   const [deadline, setDeadline] = useState('')
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [pickerYear, setPickerYear] = useState(new Date().getFullYear())
@@ -216,7 +249,7 @@ function App() {
   // 待办编辑状态
   const [editingTodoId, setEditingTodoId] = useState<number | null>(null)
   const [editTodoText, setEditTodoText] = useState('')
-  const [editTodoCategory, setEditTodoCategory] = useState('生活')
+  const [editTodoCategory, setEditTodoCategory] = useState('未分类')
   const [editTodoDeadline, setEditTodoDeadline] = useState('')
   const [editTodoPriority, setEditTodoPriority] = useState<'high' | 'medium' | 'low'>('medium')
 
@@ -338,9 +371,9 @@ function App() {
     if (!canEdit) return
     const tag = tags.find(t => t.id === id)
     if (!tag || tag.isDefault) return
-    // 关联 todo 归入"生活"
+    // 关联 todo 归入"未分类"
     setTodos(prevTodos => prevTodos.map(todo =>
-      todo.category === tag.name ? { ...todo, category: '生活' } : todo
+      todo.category === tag.name ? { ...todo, category: '未分类' } : todo
     ))
     setTags(prev => prev.filter(t => t.id !== id))
     if (selectedCategory === tag.name) setSelectedCategory('全部')
@@ -417,6 +450,11 @@ function App() {
     }
     return () => { if (undoTimerRef.current) clearTimeout(undoTimerRef.current) }
   }, [undoStack])
+
+  // 批量选择：清理已不存在的 todo
+  useEffect(() => {
+    setSelectedTodoIds(prev => prev.filter(id => todos.some(t => t.id === id)))
+  }, [todos])
 
   // 持久化通知设置
   useEffect(() => {
@@ -728,13 +766,53 @@ function App() {
 
   // === 待办操作 ===
   const priorityOrder = { 'high': 0, 'medium': 1, 'low': 2 }
-  const filteredTodos = (selectedCategory === '全部' ? todos : todos.filter(t => t.category === selectedCategory))
+  const statusFilters: { key: 'all' | 'active' | 'completed' | 'overdue' | 'today' | 'tomorrow' | 'week' | 'next7' | 'no-date'; label: string }[] = [
+    { key: 'all', label: '全部' },
+    { key: 'active', label: '未完成' },
+    { key: 'completed', label: '已完成' },
+    { key: 'overdue', label: '过期' },
+    { key: 'today', label: '今天' },
+    { key: 'tomorrow', label: '明天' },
+    { key: 'week', label: '本周' },
+    { key: 'next7', label: '未来7天' },
+    { key: 'no-date', label: '无日期' },
+  ]
+  const normalizedQuery = searchQuery.trim().toLowerCase()
+  const shouldHideCompleted = hideCompleted && statusFilter !== 'completed'
+  const todayStr = getToday()
+  const tomorrowStr = getDateWithOffset(1)
+  const next7End = getDateWithOffset(6)
+  const weekRange = getWeekRangeMonday()
+  const filteredTodos = todos
+    .filter(t => selectedCategory === '全部' || t.category === selectedCategory)
+    .filter(t => {
+      if (statusFilter === 'active') return !t.completed
+      if (statusFilter === 'completed') return t.completed
+      if (statusFilter === 'overdue') return !t.completed && t.deadline && getDaysLeft(t.deadline) < 0
+      if (statusFilter === 'today') return t.deadline?.split(' ')[0] === todayStr
+      if (statusFilter === 'tomorrow') return t.deadline?.split(' ')[0] === tomorrowStr
+      if (statusFilter === 'week') {
+        const dateStr = t.deadline?.split(' ')[0]
+        return dateStr ? (dateStr >= weekRange.start && dateStr <= weekRange.end) : false
+      }
+      if (statusFilter === 'next7') {
+        const dateStr = t.deadline?.split(' ')[0]
+        return dateStr ? (dateStr >= todayStr && dateStr <= next7End) : false
+      }
+      if (statusFilter === 'no-date') return !t.deadline
+      return true
+    })
+    .filter(t => (shouldHideCompleted ? !t.completed : true))
+    .filter(t => {
+      if (!normalizedQuery) return true
+      return t.text.toLowerCase().includes(normalizedQuery) || t.category.toLowerCase().includes(normalizedQuery)
+    })
     .sort((a, b) => (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1))
 
-  const addTodo = (text: string, category: string = '生活', deadlineVal?: string, priorityVal: 'high' | 'medium' | 'low' = 'medium') => {
+  const addTodo = (text: string, category: string = '未分类', deadlineVal?: string, priorityVal: 'high' | 'medium' | 'low' = 'medium') => {
     if (!canEdit) return
     if (!text.trim()) return
-    setTodos(prev => [{ id: Math.floor(Date.now() * 1000 + Math.random() * 1000), text, completed: false, category, deadline: deadlineVal, priority: priorityVal }, ...prev])
+    setTodos(prev => [{ id: generateTodoId(), text, completed: false, category, deadline: deadlineVal, priority: priorityVal }, ...prev])
     setInput('')
     setShowCategorySelect(false)
     setShowPrioritySelect(false)
@@ -765,6 +843,53 @@ function App() {
         setRemovingTodoId(null)
       }, 300)
     }
+  }
+
+  const toggleBatchMode = () => {
+    setIsBatchMode(prev => {
+      const next = !prev
+      if (!next) {
+        setSelectedTodoIds([])
+        setBatchCategory('')
+        setBatchPriority('')
+      }
+      return next
+    })
+  }
+
+  const toggleSelectedTodo = (id: number) => {
+    setSelectedTodoIds(prev => prev.includes(id) ? prev.filter(tid => tid !== id) : [...prev, id])
+  }
+
+  const clearSelection = () => setSelectedTodoIds([])
+
+  const handleSelectAll = () => {
+    if (filteredTodos.length === 0) return
+    const allIds = filteredTodos.map(t => t.id)
+    const allSelected = allIds.every(id => selectedTodoIds.includes(id))
+    setSelectedTodoIds(allSelected ? [] : allIds)
+  }
+
+  const applyBatchCompletion = (completed: boolean) => {
+    if (!canEdit || selectedTodoIds.length === 0) return
+    setTodos(prev => prev.map(t => selectedTodoIds.includes(t.id) ? { ...t, completed } : t))
+  }
+
+  const applyBatchCategory = (category: string) => {
+    if (!canEdit || selectedTodoIds.length === 0) return
+    setTodos(prev => prev.map(t => selectedTodoIds.includes(t.id) ? { ...t, category } : t))
+  }
+
+  const applyBatchPriority = (priority: 'high' | 'medium' | 'low') => {
+    if (!canEdit || selectedTodoIds.length === 0) return
+    setTodos(prev => prev.map(t => selectedTodoIds.includes(t.id) ? { ...t, priority } : t))
+  }
+
+  const handleBatchDelete = () => {
+    if (!canEdit || selectedTodoIds.length === 0) return
+    if (!confirm(`确定删除选中的 ${selectedTodoIds.length} 个待办吗？此操作不可撤销。`)) return
+    setTodos(prev => prev.filter(t => !selectedTodoIds.includes(t.id)))
+    setSelectedTodoIds([])
   }
 
   const handleUndo = () => {
@@ -821,12 +946,88 @@ function App() {
   }
 
   // === 数据导出/导入 ===
+  const normalizePriority = (value: any): Todo['priority'] => {
+    return value === 'high' || value === 'medium' || value === 'low' ? value : 'medium'
+  }
+
+  const normalizeTodo = (raw: any): Todo | null => {
+    if (!raw || typeof raw !== 'object') return null
+    const text = typeof raw.text === 'string' ? raw.text.trim() : ''
+    if (!text) return null
+    const id = typeof raw.id === 'number' && Number.isFinite(raw.id) ? raw.id : generateTodoId()
+    const category = typeof raw.category === 'string' && raw.category.trim() ? raw.category.trim() : '未分类'
+    const completed = Boolean(raw.completed)
+    const priority = normalizePriority(raw.priority)
+    const deadline = normalizeDeadline(raw.deadline)
+    return { id, text, completed, category, priority, ...(deadline ? { deadline } : {}) }
+  }
+
+  const normalizeLog = (raw: any): LogEntry | null => {
+    if (!raw || typeof raw !== 'object') return null
+    const content = typeof raw.content === 'string' ? raw.content.trim() : ''
+    if (!content) return null
+    const id = typeof raw.id === 'number' && Number.isFinite(raw.id) ? raw.id : Math.floor(Date.now() * 1000 + Math.random() * 1000)
+    const type: LogEntry['type'] = raw.type === 'ai_chat' || raw.type === 'ai_reply' ? raw.type : 'thought'
+    const createdAt = typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString()
+    return { id, type, content, createdAt }
+  }
+
+  const normalizeTag = (raw: any): Tag | null => {
+    if (!raw || typeof raw !== 'object') return null
+    const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+    if (!name) return null
+    const color = typeof raw.color === 'string' && isValidHexColor(raw.color) ? raw.color : TAG_COLOR_PALETTE[0]
+    const colors = (typeof raw.bgColor === 'string' && typeof raw.borderColor === 'string')
+      ? { bgColor: raw.bgColor, borderColor: raw.borderColor }
+      : deriveTagColors(color)
+    return {
+      id: typeof raw.id === 'string' ? raw.id : crypto.randomUUID(),
+      name,
+      color,
+      bgColor: colors.bgColor,
+      borderColor: colors.borderColor,
+      isDefault: Boolean(raw.isDefault),
+      createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
+    }
+  }
+
+  const normalizeNotificationSettings = (raw: any): NotificationSettings => {
+    if (!raw || typeof raw !== 'object') {
+      return { enabled: false, notifyToday: true, notifyTomorrow: true, notifyOverdue: true }
+    }
+    return {
+      enabled: Boolean(raw.enabled),
+      notifyToday: raw.notifyToday !== false,
+      notifyTomorrow: raw.notifyTomorrow !== false,
+      notifyOverdue: raw.notifyOverdue !== false,
+    }
+  }
+
+  const ensureDefaultTags = (list: Tag[]): Tag[] => {
+    const map = new Map<string, Tag>()
+    list.forEach(tag => map.set(tag.name, tag))
+    DEFAULT_TAGS.forEach(tag => {
+      if (!map.has(tag.name)) map.set(tag.name, tag)
+    })
+    return Array.from(map.values())
+  }
+
+  const mergeTagsByName = (base: Tag[], incoming: Tag[]): Tag[] => {
+    const map = new Map<string, Tag>()
+    base.forEach(tag => map.set(tag.name, tag))
+    incoming.forEach(tag => {
+      if (!map.has(tag.name)) map.set(tag.name, tag)
+    })
+    return ensureDefaultTags(Array.from(map.values()))
+  }
+
   const handleExport = () => {
     const data = {
-      version: 1,
+      schemaVersion: BACKUP_SCHEMA_VERSION,
       exportedAt: new Date().toISOString(),
       todos,
       logs,
+      tags,
       notificationSettings
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -852,26 +1053,55 @@ function App() {
           alert('无效的备份文件：缺少 todos 数据')
           return
         }
+
+        const rawTodos = data.todos as any[]
+        const normalizedTodos = rawTodos.map(normalizeTodo).filter(Boolean) as Todo[]
+        const todoMap = new Map<number, Todo>()
+        normalizedTodos.forEach(t => { if (!todoMap.has(t.id)) todoMap.set(t.id, t) })
+        const uniqueTodos = Array.from(todoMap.values())
+
+        const rawLogs = Array.isArray(data.logs) ? data.logs : []
+        const normalizedLogs = rawLogs.map(normalizeLog).filter(Boolean) as LogEntry[]
+        const logMap = new Map<number, LogEntry>()
+        normalizedLogs.forEach(l => { if (!logMap.has(l.id)) logMap.set(l.id, l) })
+        const uniqueLogs = Array.from(logMap.values())
+
+        const rawTags = Array.isArray(data.tags) ? data.tags : []
+        const normalizedTags = rawTags.map(normalizeTag).filter(Boolean) as Tag[]
+        const tagMap = new Map<string, Tag>()
+        normalizedTags.forEach(t => { if (!tagMap.has(t.name)) tagMap.set(t.name, t) })
+        const uniqueTags = Array.from(tagMap.values())
+
+        const hasNotificationSettings = data.notificationSettings && typeof data.notificationSettings === 'object'
+        const importedNotificationSettings = hasNotificationSettings ? normalizeNotificationSettings(data.notificationSettings) : null
+
         const merge = confirm('选择导入方式：\n\n点击"确定"= 合并模式（保留现有数据，追加新数据）\n点击"取消"= 覆盖模式（替换所有数据）')
         if (merge) {
           // 合并模式：按 id 去重追加
           setTodos(prev => {
             const existingIds = new Set(prev.map(t => t.id))
-            const newTodos = data.todos.filter((t: any) => !existingIds.has(t.id)).map((t: any) => ({ ...t, priority: t.priority || 'medium' }))
+            const newTodos = uniqueTodos.filter(t => !existingIds.has(t.id))
             return [...prev, ...newTodos]
           })
-          if (Array.isArray(data.logs)) {
-            setLogs(prev => {
-              const existingIds = new Set(prev.map(l => l.id))
-              const newLogs = data.logs.filter((l: any) => !existingIds.has(l.id))
-              return [...prev, ...newLogs]
-            })
+          setLogs(prev => {
+            const existingIds = new Set(prev.map(l => l.id))
+            const newLogs = uniqueLogs.filter(l => !existingIds.has(l.id))
+            return [...prev, ...newLogs]
+          })
+          if (uniqueTags.length > 0) {
+            setTags(prev => mergeTagsByName(prev, uniqueTags))
+          }
+          if (importedNotificationSettings) {
+            setNotificationSettings(prev => ({ ...prev, ...importedNotificationSettings }))
           }
         } else {
           // 覆盖模式：直接替换
-          setTodos(data.todos.map((t: any) => ({ ...t, priority: t.priority || 'medium' })))
-          if (Array.isArray(data.logs)) setLogs(data.logs)
-          if (data.notificationSettings) setNotificationSettings(data.notificationSettings)
+          setTodos(uniqueTodos)
+          setLogs(uniqueLogs)
+          setTags(ensureDefaultTags(uniqueTags.length > 0 ? uniqueTags : DEFAULT_TAGS))
+          if (importedNotificationSettings) {
+            setNotificationSettings(importedNotificationSettings)
+          }
         }
         alert('导入成功！')
       } catch {
@@ -938,6 +1168,20 @@ function App() {
   }
 
   // === 数据统计 ===
+  const last7Days = Array.from({ length: 7 }).map((_, i) => {
+    const d = new Date()
+    d.setDate(d.getDate() - (6 - i))
+    return formatDate(d)
+  })
+  const weeklyDueStats = last7Days.map(dateStr => {
+    const dueTodos = todos.filter(t => t.deadline?.split(' ')[0] === dateStr)
+    const completed = dueTodos.filter(t => t.completed).length
+    return { date: dateStr, total: dueTodos.length, completed }
+  })
+  const weeklyDueTotal = weeklyDueStats.reduce((sum, d) => sum + d.total, 0)
+  const weeklyDueCompleted = weeklyDueStats.reduce((sum, d) => sum + d.completed, 0)
+  const weeklyDueRate = weeklyDueTotal > 0 ? Math.round((weeklyDueCompleted / weeklyDueTotal) * 100) : 0
+
   const stats = {
     total: todos.length,
     completed: todos.filter(t => t.completed).length,
@@ -949,7 +1193,18 @@ function App() {
       completed: todos.filter(t => t.category === tag.name && t.completed).length,
     })),
     completionRate: todos.length > 0 ? Math.round((todos.filter(t => t.completed).length / todos.length) * 100) : 0,
+    weeklyDueStats,
+    weeklyDueRate,
   }
+
+  const isFilteredView = Boolean(searchQuery.trim()) || statusFilter !== 'all' || hideCompleted || selectedCategory !== '全部'
+  const emptyTitle = searchQuery.trim()
+    ? '未找到匹配任务'
+    : (isFilteredView ? '暂无符合条件的任务' : (EMPTY_STATE_CONFIG[selectedCategory]?.title || '暂无待办事项'))
+  const emptyHint = searchQuery.trim()
+    ? '尝试修改关键词或筛选条件'
+    : (isFilteredView ? '试试调整筛选条件或清空搜索' : (EMPTY_STATE_CONFIG[selectedCategory]?.hint || '添加你的第一个待办'))
+  const emptyIcon = searchQuery.trim() ? '🔎' : (EMPTY_STATE_CONFIG[selectedCategory]?.icon || '📋')
 
   // === 通知开关 ===
   const handleNotificationToggle = async () => {
@@ -1119,6 +1374,26 @@ function App() {
               <div className="progress-fill" style={{ width: `${stats.completionRate}%` }}></div>
             </div>
           </div>
+          <div className="stats-weekly">
+            <div className="weekly-header">
+              <span>近7日到期完成</span>
+              <span className="weekly-rate">{stats.weeklyDueRate}%</span>
+            </div>
+            <div className="weekly-bars">
+              {stats.weeklyDueStats.map(day => {
+                const ratio = day.total > 0 ? Math.round((day.completed / day.total) * 100) : 0
+                return (
+                  <div key={day.date} className="weekly-bar">
+                    <span className="weekly-date">{day.date.slice(5)}</span>
+                    <div className="weekly-track">
+                      <div className="weekly-fill" style={{ width: `${ratio}%` }}></div>
+                    </div>
+                    <span className="weekly-count">{day.completed}/{day.total}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
           <div className="stats-categories">
             {stats.byCategory.map(cat => (
               <div key={cat.name} className="category-stat">
@@ -1254,6 +1529,128 @@ function App() {
                 </button>
               </div>
 
+              <div className="todo-tools">
+                <div className="todo-search">
+                  <Search size={16} />
+                  <input
+                    className="search-input"
+                    type="text"
+                    placeholder="搜索任务或分类..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                  {searchQuery.trim() && (
+                    <button className="search-clear" onClick={() => setSearchQuery('')} title="清空搜索">
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+                <div className="filter-row">
+                  {statusFilters.map(filter => (
+                    <button
+                      key={filter.key}
+                      className={`filter-chip ${statusFilter === filter.key ? 'active' : ''}`}
+                      onClick={() => setStatusFilter(filter.key)}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                  <button
+                    className={`filter-chip ${hideCompleted ? 'active' : ''}`}
+                    onClick={() => setHideCompleted(prev => !prev)}
+                  >
+                    隐藏已完成
+                  </button>
+                  <button
+                    className={`filter-chip ${isBatchMode ? 'active' : ''}`}
+                    onClick={toggleBatchMode}
+                    disabled={!canEdit}
+                  >
+                    批量操作
+                  </button>
+                </div>
+              </div>
+
+              {isBatchMode && (
+                <div className="batch-bar">
+                  <div className="batch-left">
+                    <span className="batch-count">已选 {selectedTodoIds.length} 项</span>
+                    <button className="batch-btn" onClick={handleSelectAll} disabled={filteredTodos.length === 0}>
+                      {filteredTodos.length > 0 && filteredTodos.every(t => selectedTodoIds.includes(t.id)) ? '取消全选' : '全选'}
+                    </button>
+                    <button className="batch-btn" onClick={clearSelection} disabled={selectedTodoIds.length === 0}>
+                      清空
+                    </button>
+                  </div>
+                  <div className="batch-right">
+                    <button
+                      className="batch-btn"
+                      onClick={() => applyBatchCompletion(true)}
+                      disabled={!canEdit || selectedTodoIds.length === 0}
+                    >
+                      完成
+                    </button>
+                    <button
+                      className="batch-btn"
+                      onClick={() => applyBatchCompletion(false)}
+                      disabled={!canEdit || selectedTodoIds.length === 0}
+                    >
+                      未完成
+                    </button>
+                    <select
+                      className="batch-select"
+                      value={batchCategory}
+                      onChange={(e) => {
+                        const value = e.target.value
+                        setBatchCategory(value)
+                        if (value) {
+                          applyBatchCategory(value)
+                          setBatchCategory('')
+                        }
+                      }}
+                      disabled={!canEdit || selectedTodoIds.length === 0}
+                    >
+                      <option value="">批量分类</option>
+                      {tags.map(tag => (
+                        <option key={tag.id} value={tag.name}>{tag.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      className="batch-btn"
+                      onClick={() => applyBatchCategory('未分类')}
+                      disabled={!canEdit || selectedTodoIds.length === 0}
+                    >
+                      清空分类
+                    </button>
+                    <select
+                      className="batch-select"
+                      value={batchPriority}
+                      onChange={(e) => {
+                        const value = e.target.value as 'high' | 'medium' | 'low' | ''
+                        setBatchPriority(value)
+                        if (value) {
+                          applyBatchPriority(value)
+                          setBatchPriority('')
+                        }
+                      }}
+                      disabled={!canEdit || selectedTodoIds.length === 0}
+                    >
+                      <option value="">批量优先级</option>
+                      {(['high', 'medium', 'low'] as const).map(p => (
+                        <option key={p} value={p}>{PRIORITY_CONFIG[p].label}</option>
+                      ))}
+                    </select>
+                    <button
+                      className="batch-btn danger"
+                      onClick={handleBatchDelete}
+                      disabled={!canEdit || selectedTodoIds.length === 0}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="input-group">
                 <input
                   type="text"
@@ -1266,7 +1663,7 @@ function App() {
                       if (e.nativeEvent.isComposing || e.keyCode === 229) return
                       e.preventDefault()
                       if (input.trim()) {
-                        const category = selectedCategory === '全部' ? '生活' : selectedCategory
+                        const category = selectedCategory === '全部' ? '未分类' : selectedCategory
                         addTodo(input, category, deadline || undefined, selectedPriority)
                       }
                     }
@@ -1300,7 +1697,7 @@ function App() {
                   <Calendar size={20} />
                 </button>
                 <button
-                  onClick={() => addTodo(input, selectedCategory === '全部' ? '生活' : selectedCategory, deadline || undefined, selectedPriority)}
+                  onClick={() => addTodo(input, selectedCategory === '全部' ? '未分类' : selectedCategory, deadline || undefined, selectedPriority)}
                   disabled={!canEdit || !input.trim()}
                   className={input.trim() && canEdit ? 'active' : ''}
                 >
@@ -1452,98 +1849,119 @@ function App() {
               )}
 
               <ul className="todo-list">
-                {filteredTodos.map(todo => (
-                  <li
-                    key={todo.id}
-                    className={`
-                      ${todo.completed ? 'completed' : ''}
-                      ${editingTodoId === todo.id ? 'editing' : ''}
-                      ${removingTodoId === todo.id ? 'removing' : ''}
-                      ${dragTodoId === todo.id ? 'dragging' : ''}
-                      ${dragOverTodoId === todo.id ? 'drag-over' : ''}
-                      priority-${todo.priority || 'medium'}
-                    `}
-                    style={{ '--category-color': tagConfig[todo.category]?.color || '#8E8E93' } as React.CSSProperties}
-                    draggable={editingTodoId !== todo.id}
-                    onDragStart={(e) => handleDragStart(e, todo.id)}
-                    onDragOver={(e) => handleDragOver(e, todo.id)}
-                    onDrop={(e) => handleDrop(e, todo.id)}
-                    onDragEnd={handleDragEnd}
-                    onDragLeave={() => setDragOverTodoId(null)}
-                  >
-                    {editingTodoId === todo.id ? (
-                      <div className="todo-edit-mode">
-                        <input
-                          type="text"
-                          value={editTodoText}
-                          onChange={(e) => setEditTodoText(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') { e.preventDefault(); saveEditTodo() }
-                            else if (e.key === 'Escape') cancelEditTodo()
-                          }}
-                          autoFocus
-                          className="todo-edit-input"
-                        />
-                        <div className="todo-edit-row">
-                          <select value={editTodoCategory} onChange={(e) => setEditTodoCategory(e.target.value)} className="todo-edit-select">
-                            {tags.map(tag => (
-                              <option key={tag.id} value={tag.name}>{tag.name}</option>
-                            ))}
-                          </select>
-                          <select value={editTodoPriority} onChange={(e) => setEditTodoPriority(e.target.value as 'high' | 'medium' | 'low')} className="todo-edit-select">
-                            {(['high', 'medium', 'low'] as const).map(p => (
-                              <option key={p} value={p} style={{ color: PRIORITY_CONFIG[p].color }}>{PRIORITY_CONFIG[p].label}</option>
-                            ))}
-                          </select>
-                          <input type="date" value={editTodoDeadline} onChange={(e) => setEditTodoDeadline(e.target.value)} className="todo-edit-date" />
-                          <input type="time" value={editTodoTime} onChange={(e) => setEditTodoTime(e.target.value)} className="todo-edit-date" placeholder="时间" />
-                          <div className="todo-edit-actions">
-                            <button onClick={cancelEditTodo} className="cancel-btn">取消</button>
-                            <button onClick={saveEditTodo} className="save-btn"><Check size={14} /> 保存</button>
+                {filteredTodos.map(todo => {
+                  const isSelected = selectedTodoIds.includes(todo.id)
+                  return (
+                    <li
+                      key={todo.id}
+                      className={`
+                        ${todo.completed ? 'completed' : ''}
+                        ${editingTodoId === todo.id ? 'editing' : ''}
+                        ${removingTodoId === todo.id ? 'removing' : ''}
+                        ${dragTodoId === todo.id ? 'dragging' : ''}
+                        ${dragOverTodoId === todo.id ? 'drag-over' : ''}
+                        ${isSelected ? 'selected' : ''}
+                        priority-${todo.priority || 'medium'}
+                      `}
+                      style={{ '--category-color': tagConfig[todo.category]?.color || '#8E8E93' } as React.CSSProperties}
+                      draggable={editingTodoId !== todo.id && !isBatchMode}
+                      onDragStart={(e) => handleDragStart(e, todo.id)}
+                      onDragOver={(e) => handleDragOver(e, todo.id)}
+                      onDrop={(e) => handleDrop(e, todo.id)}
+                      onDragEnd={handleDragEnd}
+                      onDragLeave={() => setDragOverTodoId(null)}
+                    >
+                      {editingTodoId === todo.id ? (
+                        <div className="todo-edit-mode">
+                          <input
+                            type="text"
+                            value={editTodoText}
+                            onChange={(e) => setEditTodoText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.preventDefault(); saveEditTodo() }
+                              else if (e.key === 'Escape') cancelEditTodo()
+                            }}
+                            autoFocus
+                            className="todo-edit-input"
+                          />
+                          <div className="todo-edit-row">
+                            <select value={editTodoCategory} onChange={(e) => setEditTodoCategory(e.target.value)} className="todo-edit-select">
+                              {tags.map(tag => (
+                                <option key={tag.id} value={tag.name}>{tag.name}</option>
+                              ))}
+                            </select>
+                            <select value={editTodoPriority} onChange={(e) => setEditTodoPriority(e.target.value as 'high' | 'medium' | 'low')} className="todo-edit-select">
+                              {(['high', 'medium', 'low'] as const).map(p => (
+                                <option key={p} value={p} style={{ color: PRIORITY_CONFIG[p].color }}>{PRIORITY_CONFIG[p].label}</option>
+                              ))}
+                            </select>
+                            <input type="date" value={editTodoDeadline} onChange={(e) => setEditTodoDeadline(e.target.value)} className="todo-edit-date" />
+                            <input type="time" value={editTodoTime} onChange={(e) => setEditTodoTime(e.target.value)} className="todo-edit-date" placeholder="时间" />
+                            <div className="todo-edit-actions">
+                              <button onClick={cancelEditTodo} className="cancel-btn">取消</button>
+                              <button onClick={saveEditTodo} className="save-btn"><Check size={14} /> 保存</button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ) : (
-                      <>
-                        <span className="drag-handle" title="拖拽排序">
-                          <GripVertical size={16} />
-                        </span>
-                        <button className="check-btn" onClick={() => toggleTodo(todo.id)}>
-                          {todo.completed ? <CheckCircle2 size={22} color="#34C759" /> : <Circle size={22} />}
-                        </button>
-                        <div className="todo-content" onClick={() => startEditTodo(todo)}>
-                          <span className="todo-text">{todo.text}</span>
-                          <div className="todo-meta">
-                            <span
-                              className="todo-category"
-                              style={{
-                                color: tagConfig[todo.category]?.color,
-                                backgroundColor: tagConfig[todo.category]?.bgColor,
-                                borderColor: tagConfig[todo.category]?.borderColor
-                              }}
-                            >
-                              {todo.category}
+                      ) : (
+                        <>
+                          {!isBatchMode && (
+                            <span className="drag-handle" title="拖拽排序">
+                              <GripVertical size={16} />
                             </span>
-                            {todo.deadline && (
-                              <span className={`todo-deadline ${getDeadlineInfo(todo.deadline, todo.completed).className}`}>
-                                {getDeadlineInfo(todo.deadline, todo.completed).text}
+                          )}
+                          {isBatchMode ? (
+                            <input
+                              type="checkbox"
+                              className="batch-checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelectedTodo(todo.id)}
+                              disabled={!canEdit}
+                            />
+                          ) : (
+                            <button className="check-btn" onClick={() => toggleTodo(todo.id)}>
+                              {todo.completed ? <CheckCircle2 size={22} color="#34C759" /> : <Circle size={22} />}
+                            </button>
+                          )}
+                          <div
+                            className="todo-content"
+                            onClick={() => isBatchMode ? toggleSelectedTodo(todo.id) : startEditTodo(todo)}
+                          >
+                            <span className="todo-text">{todo.text}</span>
+                            <div className="todo-meta">
+                              <span
+                                className="todo-category"
+                                style={{
+                                  color: tagConfig[todo.category]?.color,
+                                  backgroundColor: tagConfig[todo.category]?.bgColor,
+                                  borderColor: tagConfig[todo.category]?.borderColor
+                                }}
+                              >
+                                {todo.category}
                               </span>
-                            )}
+                              {todo.deadline && (
+                                <span className={`todo-deadline ${getDeadlineInfo(todo.deadline, todo.completed).className}`}>
+                                  {getDeadlineInfo(todo.deadline, todo.completed).text}
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                        <button className="delete-btn" onClick={() => deleteTodo(todo.id)}>
-                          <Trash2 size={18} />
-                        </button>
-                      </>
-                    )}
-                  </li>
-                ))}
+                          {!isBatchMode && (
+                            <button className="delete-btn" onClick={() => deleteTodo(todo.id)}>
+                              <Trash2 size={18} />
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </li>
+                  )
+                })}
                 {filteredTodos.length === 0 && (
                   <li className="empty-state">
-                    <div className="empty-illustration">{EMPTY_STATE_CONFIG[selectedCategory]?.icon || '📋'}</div>
-                    <p className="empty-title">{EMPTY_STATE_CONFIG[selectedCategory]?.title || '暂无待办事项'}</p>
-                    <p className="empty-hint">{EMPTY_STATE_CONFIG[selectedCategory]?.hint || '添加你的第一个待办'}</p>
-                    {selectedCategory !== '全部' && todos.length > 0 && (
+                    <div className="empty-illustration">{emptyIcon}</div>
+                    <p className="empty-title">{emptyTitle}</p>
+                    <p className="empty-hint">{emptyHint}</p>
+                    {selectedCategory !== '全部' && todos.length > 0 && !searchQuery.trim() && (
                       <button className="empty-action" onClick={() => setSelectedCategory('全部')}>
                         查看全部待办
                       </button>

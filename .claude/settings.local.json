@@ -5,7 +5,9 @@
       "Bash(/tmp/phase2-summary.txt:*)",
       "Read(//tmp/**)",
       "Bash(npx tsc --noEmit 2>&1 | head -50)",
-      "Bash(npx vite build 2>&1 | tail -20)"
+      "Bash(npx vite build 2>&1 | tail -20)",
+      "Bash(npm run build 2>&1)",
+      "Bash(git add src/services/sync.ts src/App.tsx src/App.css && git commit -m \"$\\(cat <<'EOF'\nfix: 修复同步数据翻倍 + 手机底部导航消失\n\n- sync.ts: 添加推送锁，push 期间 Realtime 回调跳过，防止 delete+insert 间隙回流\n- App.tsx: 远程更新时 clearTimeout 取消待执行推送，isRemoteUpdate 延长到 1000ms\n- App.css: 100vh → 100dvh 修复移动端 Safari 视口，添加 safe-area-inset-bottom\nEOF\n\\)\")"
     ]
   }
 }

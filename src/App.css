@@ -207,6 +207,167 @@ header p {
   transform: translateY(-1px);
 }
 
+/* === 搜索与筛选 === */
+.todo-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.todo-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card);
+  border-radius: 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px var(--shadow);
+}
+
+.search-input {
+  flex: 1;
+  background: transparent;
+  padding: 6px 4px;
+  font-size: 14px;
+  box-shadow: none;
+}
+
+.search-input:focus {
+  box-shadow: none;
+}
+
+.search-clear {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 8px;
+  background: var(--tab-bg);
+  color: var(--gray);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-clear:hover {
+  background: var(--border-strong);
+  color: var(--text);
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filter-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: none;
+  background: var(--tab-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.filter-chip:hover {
+  background: var(--hover);
+}
+
+.filter-chip.active {
+  background: var(--primary);
+  color: white;
+}
+
+.filter-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* === 批量操作 === */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  background: var(--card);
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px var(--shadow);
+  flex-wrap: wrap;
+}
+
+.batch-left,
+.batch-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.batch-count {
+  font-size: 13px;
+  color: var(--gray);
+  font-weight: 600;
+}
+
+.batch-btn {
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: none;
+  background: var(--tab-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.batch-btn:hover:not(:disabled) {
+  background: var(--border-strong);
+}
+
+.batch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.batch-btn.danger {
+  background: rgba(255, 59, 48, 0.12);
+  color: var(--red);
+}
+
+.batch-select {
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.batch-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.batch-checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 /* === 输入区域 === */
 input, textarea {
   flex: 1;
@@ -653,6 +814,11 @@ input:focus, textarea:focus {
   gap: 12px;
 }
 
+.todo-list li.selected {
+  background: var(--primary-bg);
+  box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.2);
+}
+
 /* 优先级左边框 */
 .todo-list li.priority-high {
   border-left: 4px solid var(--red);
@@ -1090,6 +1256,63 @@ input:focus, textarea:focus {
   background: linear-gradient(90deg, var(--primary), var(--green));
   border-radius: 4px;
   transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.stats-weekly {
+  margin-bottom: 18px;
+}
+
+.weekly-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.weekly-rate {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.weekly-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.weekly-bar {
+  display: grid;
+  grid-template-columns: 44px 1fr 52px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--gray);
+}
+
+.weekly-date {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.weekly-track {
+  height: 6px;
+  background: var(--tab-bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.weekly-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), var(--green));
+  border-radius: 4px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.weekly-count {
+  text-align: right;
+  color: var(--gray);
 }
 
 .stats-categories {
