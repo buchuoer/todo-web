@@ -5,7 +5,7 @@ import {
   Check, Moon, Sun, BarChart3, GripVertical, X, Undo2, Bell, ChevronLeft, ChevronRight,
   Download, Upload, LogOut, RefreshCw, WifiOff, Cloud, Settings, Pencil
 } from 'lucide-react'
-import { extractTodos, chatWithAI } from './services/ai'
+import { extractTodos, chatWithAI, analyzeLogWithAI, type LogAnalysisAction, type LogAnalysisMessage } from './services/ai'
 import { signIn, signUp, signOut, onAuthStateChange } from './services/auth'
 import { pushTodos, pushLogs, pushTags, fetchTodos, fetchLogs, fetchTags, subscribeTodos, subscribeLogs, subscribeTags } from './services/sync'
 import './App.css'
@@ -21,6 +21,23 @@ interface LogEntry {
 interface DayLogs {
   date: string
   entries: LogEntry[]
+}
+
+interface LogInsightMessage extends LogAnalysisMessage {
+  createdAt: string
+}
+
+interface LogInsightThread {
+  actionType: LogAnalysisAction
+  status: 'loading' | 'success' | 'error'
+  messages: LogInsightMessage[]
+  updatedAt: string
+  error?: string
+}
+
+interface LogInsightState {
+  activeAction: LogAnalysisAction
+  threads: Partial<Record<LogAnalysisAction, LogInsightThread>>
 }
 
 interface Todo {
@@ -61,10 +78,16 @@ const LOGS_STORAGE_KEY = 'minimus-logs'
 const TAGS_STORAGE_KEY = 'minimus-tags'
 const TODO_DRAFT_KEY = 'minimus-todo-draft'
 const LOG_DRAFT_KEY = 'minimus-log-draft'
+const LOG_INSIGHTS_STORAGE_KEY = 'minimus-log-insights'
 const DARK_MODE_KEY = 'minimus-dark-mode'
 const NOTIFICATION_SETTINGS_KEY = 'minimus-notification-settings'
 const MIN_LOG_LENGTH = 5
 const BACKUP_SCHEMA_VERSION = 2
+const LOG_INSIGHT_ACTIONS: { key: LogAnalysisAction; label: string }[] = [
+  { key: 'deep_dive', label: '深入聊聊' },
+  { key: 'critique', label: '指出问题' },
+  { key: 'organize', label: '帮我整理' },
+]
 
 const generateTodoId = () => Math.floor(Date.now() * 1000 + Math.random() * 1000)
 
@@ -263,9 +286,19 @@ function App() {
   const [logInput, setLogInput] = useState(() => {
     try { return localStorage.getItem(LOG_DRAFT_KEY) || '' } catch { return '' }
   })
+  const [logSearchQuery, setLogSearchQuery] = useState('')
   const [isLogAiLoading, setIsLogAiLoading] = useState(false)
   const [editingLogId, setEditingLogId] = useState<number | null>(null)
   const [editContent, setEditContent] = useState('')
+  const [logInsights, setLogInsights] = useState<Record<number, LogInsightState>>(() => {
+    try {
+      const saved = localStorage.getItem(LOG_INSIGHTS_STORAGE_KEY)
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+  const [logInsightInputs, setLogInsightInputs] = useState<Record<number, string>>({})
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [input, setInput] = useState(() => {
@@ -435,6 +468,50 @@ function App() {
       else localStorage.removeItem(LOG_DRAFT_KEY)
     } catch {}
   }, [logInput])
+
+  useEffect(() => {
+    setLogInsights(prev => {
+      const validIds = new Set(logs.map(log => log.id))
+      let changed = false
+      const next: Record<number, LogInsightState> = {}
+      Object.entries(prev).forEach(([id, value]) => {
+        const numericId = Number(id)
+        if (validIds.has(numericId)) {
+          next[numericId] = value
+        } else {
+          changed = true
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [logs])
+
+  useEffect(() => {
+    setLogInsightInputs(prev => {
+      const validIds = new Set(logs.map(log => log.id))
+      let changed = false
+      const next: Record<number, string> = {}
+      Object.entries(prev).forEach(([id, value]) => {
+        const numericId = Number(id)
+        if (validIds.has(numericId)) {
+          next[numericId] = value
+        } else {
+          changed = true
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [logs])
+
+  useEffect(() => {
+    try {
+      if (Object.keys(logInsights).length > 0) {
+        localStorage.setItem(LOG_INSIGHTS_STORAGE_KEY, JSON.stringify(logInsights))
+      } else {
+        localStorage.removeItem(LOG_INSIGHTS_STORAGE_KEY)
+      }
+    } catch {}
+  }, [logInsights])
 
   // 暗黑模式
   useEffect(() => {
@@ -650,6 +727,33 @@ function App() {
       .map(([date, entries]) => ({ date, entries }))
   }
 
+  const buildTodoContext = () => {
+    if (todos.length === 0) return undefined
+    return todos.map(t =>
+      `- [${t.completed ? '✓' : ' '}] ${t.text} (${t.category}${t.deadline ? `, 截止: ${t.deadline}` : ''})`
+    ).join('\n')
+  }
+
+  const buildRecentThoughtContext = (currentLogId?: number) => {
+    const recentThoughts = logs
+      .filter(log => log.type === 'thought' && log.id !== currentLogId)
+      .slice(-5)
+      .map(log => `- ${log.content}`)
+    return recentThoughts.length > 0 ? recentThoughts.join('\n') : undefined
+  }
+
+  const getLogInsightLabel = (actionType: LogAnalysisAction) =>
+    LOG_INSIGHT_ACTIONS.find(action => action.key === actionType)?.label || 'AI 分析'
+
+  const buildInsightMessagesPayload = (messages: LogInsightMessage[]): LogAnalysisMessage[] =>
+    messages.map(message => ({ role: message.role, content: message.content }))
+
+  const buildInsightMessage = (role: 'user' | 'assistant', content: string): LogInsightMessage => ({
+    role,
+    content,
+    createdAt: new Date().toISOString()
+  })
+
   // === 日志操作 ===
   const addLog = (type: LogEntry['type'], content: string) => {
     if (!canEdit) return
@@ -663,6 +767,12 @@ function App() {
   const deleteLog = (id: number) => {
     if (!canEdit) return
     setLogs(prev => prev.filter(l => l.id !== id))
+    setLogInsightInputs(prev => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
   }
 
   const startEditLog = (id: number, content: string) => {
@@ -674,6 +784,18 @@ function App() {
     if (!canEdit) return
     if (editingLogId === null || !editContent.trim()) return
     setLogs(prev => prev.map(l => l.id === editingLogId ? { ...l, content: editContent.trim() } : l))
+    setLogInsights(prev => {
+      if (editingLogId === null || !(editingLogId in prev)) return prev
+      const next = { ...prev }
+      delete next[editingLogId]
+      return next
+    })
+    setLogInsightInputs(prev => {
+      if (editingLogId === null || !(editingLogId in prev)) return prev
+      const next = { ...prev }
+      delete next[editingLogId]
+      return next
+    })
     setEditingLogId(null)
     setEditContent('')
   }
@@ -721,11 +843,7 @@ function App() {
     }))
 
     // 高级 AI：将待办列表作为上下文传递
-    const todoContext = todos.length > 0
-      ? todos.map(t =>
-          `- [${t.completed ? '✓' : ' '}] ${t.text} (${t.category}${t.deadline ? `, 截止: ${t.deadline}` : ''})`
-        ).join('\n')
-      : undefined
+    const todoContext = buildTodoContext()
 
     try {
       addLog('ai_chat', userMessage)
@@ -750,6 +868,148 @@ function App() {
       addLog('ai_reply', `❌ ${errorMessage}\n\n💡 提示: 检查 API Key 是否正确配置，或稍后重试`)
     } finally {
       setIsLogAiLoading(false)
+    }
+  }
+
+  const runLogInsightRequest = async (
+    entry: LogEntry,
+    actionType: LogAnalysisAction,
+    options?: { regenerate?: boolean; followUp?: string }
+  ) => {
+    const currentState = logInsights[entry.id]
+    const currentThread = currentState?.threads?.[actionType]
+    if (currentThread?.status === 'loading') return
+
+    const followUp = options?.followUp?.trim()
+    const baseMessages = options?.regenerate ? [] : (currentThread?.messages || [])
+    const nextMessages = followUp
+      ? [...baseMessages, buildInsightMessage('user', followUp)]
+      : baseMessages
+
+    setLogInsights(prev => {
+      const previous = prev[entry.id]
+      return {
+        ...prev,
+        [entry.id]: {
+          activeAction: actionType,
+          threads: {
+            ...(previous?.threads || {}),
+            [actionType]: {
+              actionType,
+              status: 'loading',
+              messages: nextMessages,
+              updatedAt: new Date().toISOString(),
+            }
+          }
+        }
+      }
+    })
+
+    try {
+      const aiResponse = await analyzeLogWithAI(
+        entry.content,
+        actionType,
+        {
+          todoContext: buildTodoContext(),
+          recentLogs: buildRecentThoughtContext(entry.id)
+        },
+        buildInsightMessagesPayload(baseMessages),
+        followUp
+      )
+
+      setLogInsights(prev => {
+        const previous = prev[entry.id]
+        return {
+          ...prev,
+          [entry.id]: {
+            activeAction: actionType,
+            threads: {
+              ...(previous?.threads || {}),
+              [actionType]: {
+                actionType,
+                status: 'success',
+                messages: [
+                  ...nextMessages,
+                  buildInsightMessage('assistant', aiResponse || 'AI 暂时没有给出内容，请稍后重试。')
+                ],
+                updatedAt: new Date().toISOString(),
+              }
+            }
+          }
+        }
+      })
+    } catch (error) {
+      let errorMessage = 'AI 分析失败，请稍后重试'
+      if (error instanceof Error) {
+        if (error.message.includes('API key') || error.message.includes('401')) {
+          errorMessage = 'AI 配置无效，请检查 API Key'
+        } else if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('ECONNREFUSED')) {
+          errorMessage = '网络连接失败，请检查网络后重试'
+        } else if (error.message.includes('timeout')) {
+          errorMessage = '请求超时，请稍后重试'
+        } else if (error.message.includes('rate limit') || error.message.includes('429')) {
+          errorMessage = '请求过于频繁，请稍后再试'
+        } else {
+          errorMessage = `AI 分析失败: ${error.message}`
+        }
+      }
+
+      setLogInsights(prev => {
+        const previous = prev[entry.id]
+        return {
+          ...prev,
+          [entry.id]: {
+            activeAction: actionType,
+            threads: {
+              ...(previous?.threads || {}),
+              [actionType]: {
+                actionType,
+                status: 'error',
+                messages: nextMessages,
+                updatedAt: new Date().toISOString(),
+                error: errorMessage,
+              }
+            }
+          }
+        }
+      })
+    }
+  }
+
+  const handleAnalyzeLog = async (entry: LogEntry, actionType: LogAnalysisAction) => {
+    const existingThread = logInsights[entry.id]?.threads?.[actionType]
+    if (existingThread?.messages.length) {
+      setLogInsights(prev => ({
+        ...prev,
+        [entry.id]: {
+          activeAction: actionType,
+          threads: prev[entry.id]?.threads || {}
+        }
+      }))
+      return
+    }
+    await runLogInsightRequest(entry, actionType)
+  }
+
+  const handleRegenerateLogInsight = async (entry: LogEntry) => {
+    const activeAction = logInsights[entry.id]?.activeAction
+    if (!activeAction) return
+    await runLogInsightRequest(entry, activeAction, { regenerate: true })
+  }
+
+  const handleInsightFollowUp = async (entry: LogEntry) => {
+    const activeAction = logInsights[entry.id]?.activeAction
+    const followUp = logInsightInputs[entry.id]?.trim()
+    if (!activeAction || !followUp) return
+    setLogInsightInputs(prev => ({ ...prev, [entry.id]: '' }))
+    await runLogInsightRequest(entry, activeAction, { followUp })
+  }
+
+  const handleInsightFollowUpKeyDown = (entry: LogEntry, e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return
+      e.preventDefault()
+      handleInsightFollowUp(entry)
     }
   }
 
@@ -778,6 +1038,7 @@ function App() {
     { key: 'no-date', label: '无日期' },
   ]
   const normalizedQuery = searchQuery.trim().toLowerCase()
+  const normalizedLogQuery = logSearchQuery.trim().toLowerCase()
   const shouldHideCompleted = hideCompleted && statusFilter !== 'completed'
   const todayStr = getToday()
   const tomorrowStr = getDateWithOffset(1)
@@ -808,6 +1069,11 @@ function App() {
       return t.text.toLowerCase().includes(normalizedQuery) || t.category.toLowerCase().includes(normalizedQuery)
     })
     .sort((a, b) => (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1))
+
+  const filteredLogs = logs.filter(entry => {
+    if (!normalizedLogQuery) return true
+    return entry.content.toLowerCase().includes(normalizedLogQuery)
+  })
 
   const addTodo = (text: string, category: string = '未分类', deadlineVal?: string, priorityVal: 'high' | 'medium' | 'low' = 'medium') => {
     if (!canEdit) return
@@ -2171,7 +2437,13 @@ function App() {
                     {logs.length > 0 && (
                       <button
                         className="clear-history-btn"
-                        onClick={() => { if (canEdit && confirm('确定要清除所有日志吗？此操作不可恢复。')) setLogs([]) }}
+                        onClick={() => {
+                          if (canEdit && confirm('确定要清除所有日志吗？此操作不可恢复。')) {
+                            setLogs([])
+                            setLogInsights({})
+                            setLogInsightInputs({})
+                          }
+                        }}
                         title="清除所有日志"
                       >
                         <Trash2 size={16} /> 清除历史
@@ -2180,7 +2452,7 @@ function App() {
                   </div>
                   <textarea
                     ref={textareaRef}
-                    placeholder="记录想法...（@AI 开头可对话，Shift+Enter 换行）"
+                    placeholder="记录想法...（Shift+Enter 换行）"
                     value={logInput}
                     onChange={(e) => setLogInput(e.target.value)}
                     onKeyDown={handleLogKeyDown}
@@ -2189,7 +2461,7 @@ function App() {
                   />
                   <div className="log-actions">
                     <div className="log-hint-area">
-                      <span className="log-hint">@AI 开头可对话</span>
+                      <span className="log-hint">保存后可对单条日志发起 AI 深入分析</span>
                       {!logInput.trim().startsWith('@AI') && logInput.trim().length > 0 && (
                         <span className={`char-count ${logInput.trim().length >= MIN_LOG_LENGTH ? 'valid' : 'invalid'}`}>
                           {logInput.trim().length}/{MIN_LOG_LENGTH}
@@ -2214,12 +2486,32 @@ function App() {
                 </div>
               </div>
 
+              <div className="todo-search log-search">
+                <Search size={16} />
+                <input
+                  className="search-input"
+                  type="text"
+                  placeholder="搜索日志内容..."
+                  value={logSearchQuery}
+                  onChange={(e) => setLogSearchQuery(e.target.value)}
+                />
+                {logSearchQuery.trim() && (
+                  <button className="search-clear" onClick={() => setLogSearchQuery('')} title="清空日志搜索">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
               <div className="logs-list">
-                {groupLogsByDate(logs).map(dayLog => (
+                {groupLogsByDate(filteredLogs).map(dayLog => (
                   <div key={dayLog.date} className="log-day-group">
                     <div className="log-date-header">{formatDateDisplay(dayLog.date)}</div>
                     <div className="log-entries">
-                      {dayLog.entries.map(entry => (
+                      {dayLog.entries.map(entry => {
+                        const insightState = logInsights[entry.id]
+                        const activeAction = insightState?.activeAction
+                        const insight = activeAction ? insightState?.threads[activeAction] : undefined
+                        return (
                         <div key={entry.id} className={`log-entry log-entry-${entry.type}`}>
                           {editingLogId === entry.id ? (
                             <div className="log-edit-mode">
@@ -2230,25 +2522,103 @@ function App() {
                               </div>
                             </div>
                           ) : (
-                            <>
-                              <div className="log-icon">
-                                {entry.type === 'thought' && <span>💭</span>}
-                                {entry.type === 'ai_chat' && <User size={14} />}
-                                {entry.type === 'ai_reply' && <Bot size={14} />}
+                            <div className="log-entry-body">
+                              <div className="log-entry-main">
+                                <div className="log-icon">
+                                  {entry.type === 'thought' && <span>💭</span>}
+                                  {entry.type === 'ai_chat' && <User size={14} />}
+                                  {entry.type === 'ai_reply' && <Bot size={14} />}
+                                </div>
+                                <div className="log-content" onClick={() => startEditLog(entry.id, entry.content)}>
+                                  <p className="log-text">{entry.content}</p>
+                                  <span className="log-time">
+                                    {new Date(entry.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                                <button className="log-delete-btn" onClick={() => deleteLog(entry.id)}>
+                                  <Trash2 size={14} />
+                                </button>
                               </div>
-                              <div className="log-content" onClick={() => startEditLog(entry.id, entry.content)}>
-                                <p className="log-text">{entry.content}</p>
-                                <span className="log-time">
-                                  {new Date(entry.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                                </span>
+
+                              <div className="log-ai-actions">
+                                {LOG_INSIGHT_ACTIONS.map(action => (
+                                  <button
+                                    key={action.key}
+                                    className={`log-ai-action-btn ${activeAction === action.key ? 'active' : ''}`}
+                                    onClick={() => handleAnalyzeLog(entry, action.key)}
+                                    disabled={insightState?.threads?.[action.key]?.status === 'loading'}
+                                  >
+                                    {insightState?.threads?.[action.key]?.status === 'loading'
+                                      ? '分析中...'
+                                      : action.label}
+                                  </button>
+                                ))}
                               </div>
-                              <button className="log-delete-btn" onClick={() => deleteLog(entry.id)}>
-                                <Trash2 size={14} />
-                              </button>
-                            </>
+
+                              {insight && (
+                                <div className={`log-insight-card ${insight.status}`}>
+                                  <div className="log-insight-header">
+                                    <span className="log-insight-title">
+                                      <Sparkles size={14} />
+                                      {getLogInsightLabel(insight.actionType)}
+                                    </span>
+                                    <div className="log-insight-meta">
+                                      <span className="log-insight-time">
+                                        {new Date(insight.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                                      </span>
+                                      <button
+                                        className="log-insight-secondary-btn"
+                                        onClick={() => handleRegenerateLogInsight(entry)}
+                                        disabled={insight.status === 'loading'}
+                                      >
+                                        重新生成
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="log-insight-thread">
+                                    {insight.messages.map((message, index) => (
+                                      <div key={`${message.createdAt}-${index}`} className={`log-insight-message ${message.role}`}>
+                                        <span className="log-insight-message-role">
+                                          {message.role === 'assistant' ? 'AI' : '你'}
+                                        </span>
+                                        <div className="log-insight-content">{message.content}</div>
+                                      </div>
+                                    ))}
+                                    {insight.status === 'loading' && (
+                                      <div className="log-insight-message assistant loading">
+                                        <span className="log-insight-message-role">AI</span>
+                                        <div className="log-insight-content">正在继续思考...</div>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {insight.error && <div className="log-insight-error">{insight.error}</div>}
+
+                                  <div className="log-insight-composer">
+                                    <textarea
+                                      value={logInsightInputs[entry.id] || ''}
+                                      onChange={(e) => setLogInsightInputs(prev => ({ ...prev, [entry.id]: e.target.value }))}
+                                      onKeyDown={(e) => handleInsightFollowUpKeyDown(entry, e)}
+                                      placeholder="继续追问这条日志，按 Enter 发送，Shift+Enter 换行"
+                                      rows={2}
+                                      disabled={insight.status === 'loading'}
+                                    />
+                                    <button
+                                      className="log-insight-send-btn"
+                                      onClick={() => handleInsightFollowUp(entry)}
+                                      disabled={insight.status === 'loading' || !(logInsightInputs[entry.id] || '').trim()}
+                                    >
+                                      <Send size={14} />
+                                      发送
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           )}
                         </div>
-                      ))}
+                      )})}
                     </div>
                   </div>
                 ))}
@@ -2256,7 +2626,16 @@ function App() {
                   <div className="logs-empty">
                     <div className="logs-empty-icon">📝</div>
                     <p>暂无日志</p>
-                    <p className="logs-empty-hint">记录你的想法或使用 @AI 对话</p>
+                    <p className="logs-empty-hint">记录你的想法，然后让 AI 帮你继续拆解</p>
+                  </div>
+                )}
+                {logs.length > 0 && filteredLogs.length === 0 && (
+                  <div className="logs-empty">
+                    <div className="logs-empty-icon">🔎</div>
+                    <p>未找到匹配日志</p>
+                    <button className="log-empty-action" onClick={() => setLogSearchQuery('')}>
+                      清空搜索
+                    </button>
                   </div>
                 )}
               </div>

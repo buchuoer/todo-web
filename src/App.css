@@ -1478,10 +1478,14 @@ input:focus, textarea:focus {
   flex-direction: column;
   height: calc(100dvh - 200px);
   min-height: 400px;
+  gap: 14px;
 }
 
 .log-input-area {
-  padding-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.log-search {
   flex-shrink: 0;
 }
 
@@ -1666,10 +1670,10 @@ input:focus, textarea:focus {
 
 .log-entry {
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   padding: 14px 16px;
   border-bottom: 0.5px solid var(--border);
-  position: relative;
   animation: logFadeIn 0.3s ease-out;
 }
 
@@ -1680,6 +1684,18 @@ input:focus, textarea:focus {
 
 .log-entry:last-child { border-bottom: none; }
 .log-entry:hover .log-delete-btn { opacity: 1; }
+
+.log-entry-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.log-entry-main {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
 
 .log-icon {
   width: 28px;
@@ -1714,6 +1730,7 @@ input:focus, textarea:focus {
   font-size: 15px;
   line-height: 1.5;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .log-time {
@@ -1724,10 +1741,7 @@ input:focus, textarea:focus {
 }
 
 .log-delete-btn {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
+  flex-shrink: 0;
   background: none;
   border: none;
   padding: 6px;
@@ -1735,6 +1749,12 @@ input:focus, textarea:focus {
   opacity: 0;
   transition: opacity 0.2s;
   color: var(--red);
+  border-radius: 8px;
+  margin-left: auto;
+}
+
+.log-delete-btn:hover {
+  background: rgba(255, 59, 48, 0.08);
 }
 
 .log-edit-mode {
@@ -1778,6 +1798,198 @@ input:focus, textarea:focus {
 .log-edit-actions .cancel-btn { background: var(--tab-bg); color: var(--gray); }
 .log-edit-actions .save-btn { background: var(--primary); color: white; }
 
+.log-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: 40px;
+}
+
+.log-ai-action-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: var(--tab-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.log-ai-action-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.log-ai-action-btn.active {
+  background: var(--primary-bg);
+  color: var(--primary);
+}
+
+.log-ai-action-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.log-insight-card {
+  margin-left: 40px;
+  background: linear-gradient(180deg, var(--card-hover), var(--card));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.log-insight-card.error {
+  border-color: rgba(255, 59, 48, 0.2);
+  background: rgba(255, 59, 48, 0.05);
+}
+
+.log-insight-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.log-insight-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-insight-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.log-insight-time {
+  font-size: 11px;
+  color: var(--gray);
+}
+
+.log-insight-secondary-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: var(--tab-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.log-insight-secondary-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.log-insight-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.log-insight-message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.log-insight-message.user {
+  align-items: flex-end;
+}
+
+.log-insight-message-role {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gray);
+}
+
+.log-insight-message .log-insight-content {
+  max-width: 100%;
+  background: var(--card);
+  border-radius: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+}
+
+.log-insight-message.user .log-insight-content {
+  background: var(--primary-bg);
+  color: var(--text);
+  border-color: transparent;
+}
+
+.log-insight-message.loading .log-insight-content {
+  opacity: 0.8;
+}
+
+.log-insight-content {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-insight-error {
+  font-size: 12px;
+  color: var(--red);
+}
+
+.log-insight-composer {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  padding-top: 4px;
+}
+
+.log-insight-composer textarea {
+  flex: 1;
+  min-height: 64px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  outline: none;
+  background: var(--input-bg);
+  color: var(--text);
+  box-sizing: border-box;
+}
+
+.log-insight-composer textarea:focus {
+  border-color: var(--primary);
+}
+
+.log-insight-send-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--primary);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.log-insight-send-btn:disabled {
+  background: var(--gray-light);
+  cursor: not-allowed;
+}
+
 .logs-empty {
   display: flex;
   flex-direction: column;
@@ -1797,6 +2009,18 @@ input:focus, textarea:focus {
 
 .logs-empty p { margin: 12px 0 0 0; font-size: 15px; }
 .logs-empty-hint { font-size: 13px !important; color: var(--gray-light); }
+
+.log-empty-action {
+  margin-top: 14px;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: var(--primary-bg);
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
 
 /* === 底部导航 === */
 .mobile-nav {
