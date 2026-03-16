@@ -543,20 +543,25 @@ async function generateCompatibleText(
   systemPrompt: string,
   userText: string,
   history?: ChatMessage[],
-  temperature = 0.7
+  temperature?: number
 ): Promise<string> {
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      ...sanitizeChatHistory(history),
+      { role: 'user', content: userText },
+    ],
+  }
+
+  if (typeof temperature === 'number') {
+    body.temperature = temperature
+  }
+
   const response = await postJson<ChatCompletionResponse>(
     buildApiUrl(baseUrl, 'chat/completions'),
     apiKey,
-    {
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...sanitizeChatHistory(history),
-        { role: 'user', content: userText },
-      ],
-      temperature,
-    }
+    body
   )
 
   return getChatContent(response)
@@ -585,32 +590,55 @@ async function generateGeminiText(
   options?: { useWebSearch?: boolean; reasoningEnabled?: boolean; temperature?: number }
 ): Promise<{ content: string; usedWebSearch: boolean }> {
   const apiKey = getRequiredEnv(env.GEMINI_API_KEY, 'Gemini API key')
-  const response = await postJson<GeminiGenerateContentResponse>(
-    buildApiUrl(env.GEMINI_BASE_URL || DEFAULT_GEMINI_BASE_URL, `models/${model}:generateContent`),
-    apiKey,
-    {
-      systemInstruction: {
-        parts: [{ text: systemPrompt }],
-      },
-      contents: buildGeminiContents(history, userText),
-      generationConfig: {
-        temperature: options?.temperature ?? 0.7,
-        thinkingConfig: {
-          thinkingBudget: options?.reasoningEnabled ? GEMINI_REASONING_BUDGET : 0,
-        },
-      },
-      ...(options?.useWebSearch ? {
-        tools: [{ googleSearch: {} }],
-      } : {}),
-    },
-    { 'x-goog-api-key': apiKey },
-    false
-  )
 
-  return {
-    content: getGeminiText(response),
-    usedWebSearch: detectGeminiWebSearch(response, Boolean(options?.useWebSearch)),
+  const requestedModel = model.replace(/^models\//, '').trim()
+  const fallbackModels = requestedModel === 'gemini-3-flash'
+    ? ['gemini-3-flash-preview']
+    : requestedModel === 'gemini-3-pro'
+      ? ['gemini-3-pro-preview']
+      : []
+
+  let lastError: unknown
+
+  for (const candidateModel of [requestedModel, ...fallbackModels]) {
+    try {
+      const response = await postJson<GeminiGenerateContentResponse>(
+        buildApiUrl(env.GEMINI_BASE_URL || DEFAULT_GEMINI_BASE_URL, `models/${candidateModel}:generateContent`),
+        apiKey,
+        {
+          systemInstruction: {
+            parts: [{ text: systemPrompt }],
+          },
+          contents: buildGeminiContents(history, userText),
+          generationConfig: {
+            temperature: options?.temperature ?? 0.7,
+            thinkingConfig: {
+              thinkingBudget: options?.reasoningEnabled ? GEMINI_REASONING_BUDGET : 0,
+            },
+          },
+          ...(options?.useWebSearch ? {
+            tools: [{ googleSearch: {} }],
+          } : {}),
+        },
+        { 'x-goog-api-key': apiKey },
+        false
+      )
+
+      return {
+        content: getGeminiText(response),
+        usedWebSearch: detectGeminiWebSearch(response, Boolean(options?.useWebSearch)),
+      }
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : String(error)
+      const modelMissing = message.includes('is not found') || message.includes('not supported for generateContent')
+      if (!modelMissing || candidateModel === fallbackModels[fallbackModels.length - 1]) {
+        throw error
+      }
+    }
   }
+
+  throw lastError instanceof Error ? lastError : new Error('Gemini request failed')
 }
 
 async function generateText(env: AiEnv, modelId: string | undefined, options: GenerateTextOptions): Promise<{ content: string; usedWebSearch: boolean; model: AiModelDescriptor }> {
@@ -640,8 +668,7 @@ async function generateText(env: AiEnv, modelId: string | undefined, options: Ge
         resolvedModelName,
         options.systemPrompt,
         options.userText,
-        options.history,
-        options.temperature
+        options.history
       )
       return { content, usedWebSearch: false, model }
     }

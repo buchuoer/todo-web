@@ -36,6 +36,10 @@ GEMINI_LOG_MODEL=gemini-2.5-flash
 KIMI_BASE_URL=https://api.moonshot.cn/v1
 ```
 
+Notes:
+- Gemini 建议优先使用 `gemini-2.5-flash`。如果要配 3 系列，请使用当前接口支持的模型名；`gemini-3-flash` 这类别名可能会被上游拒绝。
+- Kimi 某些模型会限制采样参数，建议先用同一个稳定模型同时填到 `KIMI_CHAT_MODEL` 和 `KIMI_LOG_MODEL`。
+
 ## Local Development
 1. Copy `.dev.vars.example` to `.dev.vars` and fill in real secrets.
 2. Run `npm run build`.
