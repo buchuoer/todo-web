@@ -32,6 +32,8 @@ interface LogInsightThread {
   status: 'loading' | 'success' | 'error'
   messages: LogInsightMessage[]
   updatedAt: string
+  sourceMode: 'local' | 'web'
+  usedWebSearch: boolean
   error?: string
 }
 
@@ -88,6 +90,110 @@ const LOG_INSIGHT_ACTIONS: { key: LogAnalysisAction; label: string }[] = [
   { key: 'critique', label: '指出问题' },
   { key: 'organize', label: '帮我整理' },
 ]
+
+const isLogAnalysisAction = (value: unknown): value is LogAnalysisAction =>
+  value === 'deep_dive' || value === 'critique' || value === 'organize'
+
+const normalizeInsightMessages = (rawMessages: unknown, fallbackTime: string): LogInsightMessage[] => {
+  if (!Array.isArray(rawMessages)) return []
+  return rawMessages
+    .map((message): LogInsightMessage | null => {
+      if (!message || typeof message !== 'object') return null
+      const role = (message as { role?: unknown }).role
+      const content = (message as { content?: unknown }).content
+      const createdAt = (message as { createdAt?: unknown }).createdAt
+      if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string' || !content.trim()) return null
+      return {
+        role,
+        content,
+        createdAt: typeof createdAt === 'string' && createdAt.trim() ? createdAt : fallbackTime
+      }
+    })
+    .filter((message): message is LogInsightMessage => Boolean(message))
+}
+
+const normalizeInsightThread = (actionType: LogAnalysisAction, rawThread: unknown): LogInsightThread | null => {
+  if (!rawThread || typeof rawThread !== 'object') return null
+  const thread = rawThread as {
+    status?: unknown
+    messages?: unknown
+    updatedAt?: unknown
+    error?: unknown
+    sourceMode?: unknown
+    usedWebSearch?: unknown
+    content?: unknown
+  }
+  const updatedAt = typeof thread.updatedAt === 'string' && thread.updatedAt.trim()
+    ? thread.updatedAt
+    : new Date().toISOString()
+  const messages = normalizeInsightMessages(thread.messages, updatedAt)
+  const migratedMessages = messages.length > 0
+    ? messages
+    : (typeof thread.content === 'string' && thread.content.trim()
+        ? [{ role: 'assistant' as const, content: thread.content, createdAt: updatedAt }]
+        : [])
+  if (migratedMessages.length === 0) return null
+  return {
+    actionType,
+    status: thread.status === 'loading' || thread.status === 'error' ? thread.status : 'success',
+    messages: migratedMessages,
+    updatedAt,
+    sourceMode: thread.sourceMode === 'web' ? 'web' : 'local',
+    usedWebSearch: Boolean(thread.usedWebSearch),
+    error: typeof thread.error === 'string' && thread.error.trim() ? thread.error : undefined
+  }
+}
+
+const normalizeLogInsights = (raw: unknown): Record<number, LogInsightState> => {
+  if (!raw || typeof raw !== 'object') return {}
+  const normalized: Record<number, LogInsightState> = {}
+
+  Object.entries(raw as Record<string, unknown>).forEach(([id, rawState]) => {
+    const numericId = Number(id)
+    if (!Number.isFinite(numericId) || !rawState || typeof rawState !== 'object') return
+
+    const state = rawState as {
+      activeAction?: unknown
+      actionType?: unknown
+      threads?: unknown
+      status?: unknown
+      messages?: unknown
+      updatedAt?: unknown
+      content?: unknown
+      sourceMode?: unknown
+      usedWebSearch?: unknown
+      error?: unknown
+    }
+
+    const normalizedThreads: Partial<Record<LogAnalysisAction, LogInsightThread>> = {}
+
+    if (state.threads && typeof state.threads === 'object') {
+      Object.entries(state.threads as Record<string, unknown>).forEach(([key, rawThread]) => {
+        if (!isLogAnalysisAction(key)) return
+        const normalizedThread = normalizeInsightThread(key, rawThread)
+        if (normalizedThread) normalizedThreads[key] = normalizedThread
+      })
+    }
+
+    if (Object.keys(normalizedThreads).length === 0 && isLogAnalysisAction(state.actionType)) {
+      const normalizedThread = normalizeInsightThread(state.actionType, state)
+      if (normalizedThread) normalizedThreads[state.actionType] = normalizedThread
+    }
+
+    const activeAction = isLogAnalysisAction(state.activeAction)
+      ? state.activeAction
+      : (isLogAnalysisAction(state.actionType) ? state.actionType : undefined)
+
+    if (!activeAction || !normalizedThreads[activeAction]) return
+
+    normalized[numericId] = {
+      activeAction,
+      threads: normalizedThreads
+    }
+  })
+
+  return normalized
+}
 
 const generateTodoId = () => Math.floor(Date.now() * 1000 + Math.random() * 1000)
 
@@ -293,7 +399,7 @@ function App() {
   const [logInsights, setLogInsights] = useState<Record<number, LogInsightState>>(() => {
     try {
       const saved = localStorage.getItem(LOG_INSIGHTS_STORAGE_KEY)
-      return saved ? JSON.parse(saved) : {}
+      return saved ? normalizeLogInsights(JSON.parse(saved)) : {}
     } catch {
       return {}
     }
@@ -874,13 +980,14 @@ function App() {
   const runLogInsightRequest = async (
     entry: LogEntry,
     actionType: LogAnalysisAction,
-    options?: { regenerate?: boolean; followUp?: string }
+    options?: { regenerate?: boolean; followUp?: string; useWebSearch?: boolean; forceWebSearch?: boolean }
   ) => {
     const currentState = logInsights[entry.id]
     const currentThread = currentState?.threads?.[actionType]
     if (currentThread?.status === 'loading') return
 
     const followUp = options?.followUp?.trim()
+    const shouldUseWebSearch = options?.useWebSearch ?? currentThread?.sourceMode === 'web'
     const baseMessages = options?.regenerate ? [] : (currentThread?.messages || [])
     const nextMessages = followUp
       ? [...baseMessages, buildInsightMessage('user', followUp)]
@@ -899,6 +1006,8 @@ function App() {
               status: 'loading',
               messages: nextMessages,
               updatedAt: new Date().toISOString(),
+              sourceMode: shouldUseWebSearch ? 'web' : 'local',
+              usedWebSearch: options?.regenerate ? false : (currentThread?.usedWebSearch || false),
             }
           }
         }
@@ -914,7 +1023,11 @@ function App() {
           recentLogs: buildRecentThoughtContext(entry.id)
         },
         buildInsightMessagesPayload(baseMessages),
-        followUp
+        followUp,
+        {
+          useWebSearch: shouldUseWebSearch,
+          forceWebSearch: options?.forceWebSearch
+        }
       )
 
       setLogInsights(prev => {
@@ -930,9 +1043,11 @@ function App() {
                 status: 'success',
                 messages: [
                   ...nextMessages,
-                  buildInsightMessage('assistant', aiResponse || 'AI 暂时没有给出内容，请稍后重试。')
+                  buildInsightMessage('assistant', aiResponse.content)
                 ],
                 updatedAt: new Date().toISOString(),
+                sourceMode: shouldUseWebSearch ? 'web' : 'local',
+                usedWebSearch: aiResponse.usedWebSearch,
               }
             }
           }
@@ -967,6 +1082,8 @@ function App() {
                 status: 'error',
                 messages: nextMessages,
                 updatedAt: new Date().toISOString(),
+                sourceMode: shouldUseWebSearch ? 'web' : 'local',
+                usedWebSearch: currentThread?.usedWebSearch || false,
                 error: errorMessage,
               }
             }
@@ -994,7 +1111,17 @@ function App() {
   const handleRegenerateLogInsight = async (entry: LogEntry) => {
     const activeAction = logInsights[entry.id]?.activeAction
     if (!activeAction) return
-    await runLogInsightRequest(entry, activeAction, { regenerate: true })
+    await runLogInsightRequest(entry, activeAction, { regenerate: true, useWebSearch: false })
+  }
+
+  const handleWebSearchLogInsight = async (entry: LogEntry) => {
+    const activeAction = logInsights[entry.id]?.activeAction
+    if (!activeAction) return
+    await runLogInsightRequest(entry, activeAction, {
+      regenerate: true,
+      useWebSearch: true,
+      forceWebSearch: true
+    })
   }
 
   const handleInsightFollowUp = async (entry: LogEntry) => {
@@ -2558,10 +2685,15 @@ function App() {
                               {insight && (
                                 <div className={`log-insight-card ${insight.status}`}>
                                   <div className="log-insight-header">
-                                    <span className="log-insight-title">
-                                      <Sparkles size={14} />
-                                      {getLogInsightLabel(insight.actionType)}
-                                    </span>
+                                    <div className="log-insight-title-group">
+                                      <span className="log-insight-title">
+                                        <Sparkles size={14} />
+                                        {getLogInsightLabel(insight.actionType)}
+                                      </span>
+                                      <span className={`log-insight-source-badge ${insight.sourceMode}`}>
+                                        {insight.usedWebSearch ? '已联网检索' : (insight.sourceMode === 'web' ? '联网模式' : '本地回答')}
+                                      </span>
+                                    </div>
                                     <div className="log-insight-meta">
                                       <span className="log-insight-time">
                                         {new Date(insight.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
@@ -2572,6 +2704,13 @@ function App() {
                                         disabled={insight.status === 'loading'}
                                       >
                                         重新生成
+                                      </button>
+                                      <button
+                                        className="log-insight-secondary-btn"
+                                        onClick={() => handleWebSearchLogInsight(entry)}
+                                        disabled={insight.status === 'loading'}
+                                      >
+                                        联网重答
                                       </button>
                                     </div>
                                   </div>
@@ -2600,7 +2739,9 @@ function App() {
                                       value={logInsightInputs[entry.id] || ''}
                                       onChange={(e) => setLogInsightInputs(prev => ({ ...prev, [entry.id]: e.target.value }))}
                                       onKeyDown={(e) => handleInsightFollowUpKeyDown(entry, e)}
-                                      placeholder="继续追问这条日志，按 Enter 发送，Shift+Enter 换行"
+                                      placeholder={insight.sourceMode === 'web'
+                                        ? '继续追问这条日志（当前联网模式），按 Enter 发送，Shift+Enter 换行'
+                                        : '继续追问这条日志，按 Enter 发送，Shift+Enter 换行'}
                                       rows={2}
                                       disabled={insight.status === 'loading'}
                                     />
@@ -2610,7 +2751,7 @@ function App() {
                                       disabled={insight.status === 'loading' || !(logInsightInputs[entry.id] || '').trim()}
                                     >
                                       <Send size={14} />
-                                      发送
+                                      {insight.sourceMode === 'web' ? '联网追问' : '发送'}
                                     </button>
                                   </div>
                                 </div>

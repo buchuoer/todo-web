@@ -1855,6 +1855,13 @@ input:focus, textarea:focus {
   gap: 10px;
 }
 
+.log-insight-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .log-insight-meta {
   display: flex;
   align-items: center;
@@ -1873,6 +1880,25 @@ input:focus, textarea:focus {
 .log-insight-time {
   font-size: 11px;
   color: var(--gray);
+}
+
+.log-insight-source-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.log-insight-source-badge.local {
+  background: var(--tab-bg);
+  color: var(--text-secondary);
+}
+
+.log-insight-source-badge.web {
+  background: rgba(52, 199, 89, 0.12);
+  color: #248a3d;
 }
 
 .log-insight-secondary-btn {

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "pages:dev": "npx wrangler pages dev dist"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
