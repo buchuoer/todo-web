@@ -255,7 +255,12 @@ const getDaysLeft = (deadline: string): number => {
   return Math.ceil((deadlineDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 }
 
-const formatDate = (date: Date): string => date.toISOString().split('T')[0]
+const formatDate = (date: Date): string => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 const getToday = (): string => formatDate(new Date())
 const getDateWithOffset = (days: number): string => formatDate(new Date(Date.now() + days * 86400000))
 const getWeekRangeMonday = (): { start: string; end: string } => {
@@ -947,14 +952,14 @@ function App() {
   }, [notificationSettings, todos])
 
   // === 日期辅助 ===
-  const getTodayDate = (): string => new Date().toISOString().split('T')[0]
+  const getTodayDate = (): string => formatDate(new Date())
 
   const formatDateDisplay = (dateStr: string): string => {
     const today = getTodayDate()
     const yesterday = new Date()
     yesterday.setDate(yesterday.getDate() - 1)
     if (dateStr === today) return '今日'
-    if (dateStr === yesterday.toISOString().split('T')[0]) return '昨日'
+    if (dateStr === formatDate(yesterday)) return '昨日'
     return dateStr
   }
 
