@@ -1,4 +1,21 @@
 export type LogAnalysisAction = 'deep_dive' | 'critique' | 'organize'
+export type AiFeature = 'chat' | 'logAnalysis' | 'extractTodos' | 'polishIdea'
+export type AiProvider = 'deepseek' | 'gemini' | 'kimi'
+export type AiModelId = 'deepseek' | 'gemini' | 'kimi'
+
+export interface AiFeatureCapability {
+  supportsReasoning: boolean
+  supportsWebSearch: boolean
+  isDefault: boolean
+}
+
+export interface AiModelDescriptor {
+  id: AiModelId
+  label: string
+  provider: AiProvider
+  features: Partial<Record<AiFeature, AiFeatureCapability>>
+}
+
 export interface LogAnalysisMessage {
   role: 'user' | 'assistant'
   content: string
@@ -6,10 +23,13 @@ export interface LogAnalysisMessage {
 export interface LogAnalysisOptions {
   useWebSearch?: boolean
   forceWebSearch?: boolean
+  reasoningEnabled?: boolean
 }
 export interface LogAnalysisResult {
   content: string
   usedWebSearch: boolean
+  modelId: AiModelId
+  modelLabel: string
 }
 
 interface AiResponse<T> {
@@ -61,6 +81,36 @@ async function requestAi<T>(path: string, payload: unknown): Promise<T> {
   return payloadData.data
 }
 
+async function requestAiGet<T>(path: string): Promise<T> {
+  let response: Response
+
+  try {
+    response = await fetch(`${AI_API_BASE}/${path}`)
+  } catch (error) {
+    if (error instanceof Error) throw error
+    throw new Error('AI 请求失败')
+  }
+
+  const contentType = response.headers.get('content-type') || ''
+  const isJson = contentType.includes('application/json')
+  const payloadData = isJson
+    ? await response.json() as AiResponse<T>
+    : ({ error: await response.text() } as AiResponse<T>)
+
+  if (!response.ok) {
+    const message = typeof payloadData?.error === 'string' && payloadData.error.trim()
+      ? payloadData.error.trim()
+      : 'AI 请求失败'
+    throw new Error(`${response.status} ${message}`)
+  }
+
+  if (!payloadData || typeof payloadData !== 'object' || !('data' in payloadData)) {
+    throw new Error('AI 响应格式无效')
+  }
+
+  return payloadData.data
+}
+
 /**
  * 从文本中提取待办任务（高级版）
  * 支持自然语言日期、优先级检测、智能分类
@@ -75,9 +125,14 @@ export async function extractTodos(text: string, categories?: string[]) {
 export async function chatWithAI(
   text: string,
   history?: { role: 'user' | 'assistant'; content: string }[],
-  todoContext?: string
+  todoContext?: string,
+  options?: {
+    modelId?: AiModelId
+    useWebSearch?: boolean
+    reasoningEnabled?: boolean
+  }
 ) {
-  return requestAi<string>('chat', { text, history, todoContext })
+  return requestAi<string>('chat', { text, history, todoContext, modelId: options?.modelId, options })
 }
 
 export async function analyzeLogWithAI(
@@ -86,7 +141,7 @@ export async function analyzeLogWithAI(
   context?: { todoContext?: string; recentLogs?: string },
   history?: LogAnalysisMessage[],
   followUp?: string,
-  options?: LogAnalysisOptions
+  options?: LogAnalysisOptions & { modelId?: AiModelId }
 ): Promise<LogAnalysisResult> {
   return requestAi<LogAnalysisResult>('analyze-log', {
     text,
@@ -94,6 +149,7 @@ export async function analyzeLogWithAI(
     context,
     history,
     followUp,
+    modelId: options?.modelId,
     options,
   })
 }
@@ -103,4 +159,8 @@ export async function analyzeLogWithAI(
  */
 export async function polishIdea(text: string) {
   return requestAi<string>('polish-idea', { text })
+}
+
+export async function fetchAiModels() {
+  return requestAiGet<AiModelDescriptor[]>('models')
 }

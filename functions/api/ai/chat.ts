@@ -1,9 +1,14 @@
-import { chatWithDeepSeek, jsonData, jsonError, readJson, type AiEnv, type ChatMessage } from '../../../server/aiProxy'
+import { chatWithModel, jsonData, jsonError, readJson, type AiEnv, type ChatMessage } from '../../../server/aiProxy'
 
 interface ChatRequest {
   text?: string
   history?: ChatMessage[]
   todoContext?: string
+  modelId?: string
+  options?: {
+    useWebSearch?: boolean
+    reasoningEnabled?: boolean
+  }
 }
 
 export async function onRequestPost(context: { request: Request; env: AiEnv }) {
@@ -14,7 +19,14 @@ export async function onRequestPost(context: { request: Request; env: AiEnv }) {
 
     if (!text) return jsonError('400 text is required', 400)
 
-    const data = await chatWithDeepSeek(context.env, text, body.history, todoContext)
+    const data = await chatWithModel(
+      context.env,
+      text,
+      body.history,
+      todoContext,
+      typeof body.modelId === 'string' ? body.modelId : undefined,
+      body.options
+    )
     return jsonData(data)
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : 'AI 对话失败')

@@ -1,5 +1,13 @@
 DEEPSEEK_API_KEY=your_deepseek_key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-OPENAI_API_KEY=your_openai_key
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4.1-mini
+DEEPSEEK_CHAT_MODEL=deepseek-chat
+
+GEMINI_API_KEY=your_gemini_key
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_CHAT_MODEL=gemini-2.5-flash
+GEMINI_LOG_MODEL=gemini-2.5-flash
+
+KIMI_API_KEY=your_kimi_key
+KIMI_BASE_URL=https://api.moonshot.cn/v1
+KIMI_CHAT_MODEL=your_kimi_chat_model
+KIMI_LOG_MODEL=your_kimi_log_model

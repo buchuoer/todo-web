@@ -1,7 +1,8 @@
-import { jsonData, jsonError, polishIdeaWithDeepSeek, readJson, type AiEnv } from '../../../server/aiProxy'
+import { jsonData, jsonError, polishIdeaWithModel, readJson, type AiEnv } from '../../../server/aiProxy'
 
 interface PolishIdeaRequest {
   text?: string
+  modelId?: string
 }
 
 export async function onRequestPost(context: { request: Request; env: AiEnv }) {
@@ -11,7 +12,11 @@ export async function onRequestPost(context: { request: Request; env: AiEnv }) {
 
     if (!text) return jsonError('400 text is required', 400)
 
-    const data = await polishIdeaWithDeepSeek(context.env, text)
+    const data = await polishIdeaWithModel(
+      context.env,
+      text,
+      typeof body.modelId === 'string' ? body.modelId : undefined
+    )
     return jsonData(data)
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : 'AI 整理失败')

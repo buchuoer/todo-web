@@ -1,5 +1,5 @@
 import {
-  analyzeLogWithOpenAI,
+  analyzeLogWithModel,
   jsonData,
   jsonError,
   readJson,
@@ -16,6 +16,7 @@ interface AnalyzeLogRequest {
   context?: AnalyzeLogContext
   history?: ChatMessage[]
   followUp?: string
+  modelId?: string
   options?: AnalyzeLogOptions
 }
 
@@ -31,13 +32,14 @@ export async function onRequestPost(context: { request: Request; env: AiEnv }) {
     if (!text) return jsonError('400 text is required', 400)
     if (!isLogAnalysisAction(body.actionType)) return jsonError('400 invalid actionType', 400)
 
-    const data = await analyzeLogWithOpenAI(
+    const data = await analyzeLogWithModel(
       context.env,
       text,
       body.actionType,
       body.context,
       body.history,
       followUp,
+      typeof body.modelId === 'string' ? body.modelId : undefined,
       body.options
     )
 

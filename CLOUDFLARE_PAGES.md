@@ -15,16 +15,25 @@ Set these in Cloudflare Pages -> Settings -> Variables and Secrets -> Production
 
 - `DEEPSEEK_API_KEY`
 - `DEEPSEEK_BASE_URL`
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
-- `OPENAI_MODEL`
+- `DEEPSEEK_CHAT_MODEL`
+- `GEMINI_API_KEY`
+- `GEMINI_BASE_URL`
+- `GEMINI_CHAT_MODEL`
+- `GEMINI_LOG_MODEL`
+- `KIMI_API_KEY`
+- `KIMI_BASE_URL`
+- `KIMI_CHAT_MODEL`
+- `KIMI_LOG_MODEL`
 
 Recommended defaults:
 
 ```txt
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4.1-mini
+DEEPSEEK_CHAT_MODEL=deepseek-chat
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_CHAT_MODEL=gemini-2.5-flash
+GEMINI_LOG_MODEL=gemini-2.5-flash
+KIMI_BASE_URL=https://api.moonshot.cn/v1
 ```
 
 ## Local Development
@@ -45,4 +54,5 @@ Cloudflare's official Pages docs currently recommend `wrangler pages dev <DIRECT
 ## Security Outcome
 - Browser bundle no longer contains AI provider API keys.
 - AI requests now go through Cloudflare Pages Functions at `/api/ai/*`.
+- `/api/ai/models` exposes only model metadata and capabilities, never secrets.
 - Supabase remains directly called from the browser using the public anon key, which is expected for this architecture.

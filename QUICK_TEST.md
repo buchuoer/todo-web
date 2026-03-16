@@ -120,7 +120,7 @@ A: 检查浏览器缓存，按 Ctrl+Shift+Delete 清除缓存后重试。
 A: 确保按的是 Shift+Enter（不是 Alt+Enter），日志框支持多行。
 
 **Q: AI 建议卡没有响应？**
-A: 现在 AI 请求走 Cloudflare Pages Functions。先检查浏览器 Network 是否能访问 `/api/ai/*`，再检查 Cloudflare 中的 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`DEEPSEEK_API_KEY` 是否已配置。
+A: 现在 AI 请求走 Cloudflare Pages Functions。先检查浏览器 Network 是否能访问 `/api/ai/*`，再检查 Cloudflare 中的 `GEMINI_API_KEY`、`DEEPSEEK_API_KEY`、`KIMI_API_KEY` 以及对应模型名是否已配置。
 
 **Q: 日志框有红色边框或错误？**
 A: 打开浏览器控制台 (F12) 查看具体错误信息。

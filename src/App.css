@@ -1489,6 +1489,18 @@ input:focus, textarea:focus {
   flex-shrink: 0;
 }
 
+.log-analysis-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: var(--card);
+  border-radius: 14px;
+  box-shadow: 0 2px 8px var(--shadow);
+}
+
 .log-editor {
   background: var(--card);
   border-radius: 16px;
@@ -1564,6 +1576,79 @@ input:focus, textarea:focus {
 
 .log-editor textarea:focus {
   background: var(--card-hover);
+}
+
+.ai-model-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 0;
+}
+
+.ai-model-controls-header,
+.log-analysis-controls-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ai-model-controls-title,
+.log-analysis-controls-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+
+.ai-model-controls-error {
+  font-size: 12px;
+  color: var(--red);
+}
+
+.ai-model-controls-row,
+.log-analysis-controls-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-model-select {
+  min-width: 132px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ai-model-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ai-toggle-chip {
+  border: none;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: var(--tab-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.ai-toggle-chip:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ai-toggle-chip.active {
+  background: var(--primary-bg);
+  color: var(--primary);
 }
 
 .log-actions {
@@ -1899,6 +1984,26 @@ input:focus, textarea:focus {
 .log-insight-source-badge.web {
   background: rgba(52, 199, 89, 0.12);
   color: #248a3d;
+}
+
+.log-insight-model-badge,
+.log-insight-reasoning-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.log-insight-model-badge {
+  background: rgba(0, 122, 255, 0.1);
+  color: var(--primary);
+}
+
+.log-insight-reasoning-badge {
+  background: rgba(255, 149, 0, 0.12);
+  color: var(--orange);
 }
 
 .log-insight-secondary-btn {
@@ -3091,4 +3196,26 @@ button:active::after {
 .add-tag-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .log-actions,
+  .log-analysis-controls {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .log-hint-area,
+  .log-action-buttons,
+  .log-analysis-controls-right {
+    width: 100%;
+  }
+
+  .log-action-buttons {
+    justify-content: flex-end;
+  }
+
+  .ai-model-select {
+    width: 100%;
+  }
 }

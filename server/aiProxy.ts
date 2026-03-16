@@ -1,9 +1,34 @@
 export interface AiEnv {
   DEEPSEEK_API_KEY?: string
   DEEPSEEK_BASE_URL?: string
-  OPENAI_API_KEY?: string
-  OPENAI_BASE_URL?: string
-  OPENAI_MODEL?: string
+  DEEPSEEK_MODEL?: string
+  DEEPSEEK_CHAT_MODEL?: string
+  DEEPSEEK_LOG_MODEL?: string
+  DEEPSEEK_EXTRACT_MODEL?: string
+  DEEPSEEK_POLISH_MODEL?: string
+  DEEPSEEK_REASONING_MODEL?: string
+  DEEPSEEK_CHAT_REASONING_MODEL?: string
+  DEEPSEEK_LOG_REASONING_MODEL?: string
+  GEMINI_API_KEY?: string
+  GEMINI_BASE_URL?: string
+  GEMINI_MODEL?: string
+  GEMINI_CHAT_MODEL?: string
+  GEMINI_LOG_MODEL?: string
+  GEMINI_EXTRACT_MODEL?: string
+  GEMINI_POLISH_MODEL?: string
+  GEMINI_REASONING_MODEL?: string
+  GEMINI_CHAT_REASONING_MODEL?: string
+  GEMINI_LOG_REASONING_MODEL?: string
+  KIMI_API_KEY?: string
+  KIMI_BASE_URL?: string
+  KIMI_MODEL?: string
+  KIMI_CHAT_MODEL?: string
+  KIMI_LOG_MODEL?: string
+  KIMI_EXTRACT_MODEL?: string
+  KIMI_POLISH_MODEL?: string
+  KIMI_REASONING_MODEL?: string
+  KIMI_CHAT_REASONING_MODEL?: string
+  KIMI_LOG_REASONING_MODEL?: string
 }
 
 export interface ChatMessage {
@@ -25,13 +50,32 @@ export interface AnalyzeLogContext {
 export interface AnalyzeLogOptions {
   useWebSearch?: boolean
   forceWebSearch?: boolean
+  reasoningEnabled?: boolean
 }
 
 export type LogAnalysisAction = 'deep_dive' | 'critique' | 'organize'
+export type AiFeature = 'chat' | 'logAnalysis' | 'extractTodos' | 'polishIdea'
+export type AiProvider = 'deepseek' | 'gemini' | 'kimi'
+export type AiModelId = 'deepseek' | 'gemini' | 'kimi'
+
+export interface AiFeatureCapability {
+  supportsReasoning: boolean
+  supportsWebSearch: boolean
+  isDefault: boolean
+}
+
+export interface AiModelDescriptor {
+  id: AiModelId
+  label: string
+  provider: AiProvider
+  features: Partial<Record<AiFeature, AiFeatureCapability>>
+}
 
 export interface LogAnalysisResult {
   content: string
   usedWebSearch: boolean
+  modelId: AiModelId
+  modelLabel: string
 }
 
 interface ChatCompletionResponse {
@@ -42,25 +86,40 @@ interface ChatCompletionResponse {
   }>
 }
 
-interface OpenAiResponse {
-  output_text?: string
-  output?: Array<{
-    type?: string
-    content?: Array<{
-      type?: string
-      text?: string
-    }>
+interface GeminiGenerateContentResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string
+      }>
+    }
+    groundingMetadata?: {
+      groundingChunks?: unknown[]
+      webSearchQueries?: string[]
+    }
   }>
   error?: {
     message?: string
   }
 }
 
+interface GenerateTextOptions {
+  feature: AiFeature
+  systemPrompt: string
+  userText: string
+  history?: ChatMessage[]
+  useWebSearch?: boolean
+  reasoningEnabled?: boolean
+  temperature?: number
+}
+
 const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
-const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
-const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini'
+const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
+const DEFAULT_KIMI_BASE_URL = 'https://api.moonshot.cn/v1'
+const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
 const DEFAULT_TODO_CATEGORY = '生活'
-const OPENAI_WEB_SEARCH_TOOL = 'web_search_preview'
+const GEMINI_REASONING_BUDGET = 1024
 
 const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
@@ -90,8 +149,12 @@ const actionPromptMap: Record<LogAnalysisAction, string> = {
 要求简洁、结构清晰、有实际用途。`
 }
 
+function hasText(value: string | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
 function getRequiredEnv(value: string | undefined, name: string): string {
-  if (!value || !value.trim()) {
+  if (!hasText(value)) {
     throw new Error(`${name} missing`)
   }
   return value.trim()
@@ -101,12 +164,19 @@ function buildApiUrl(baseUrl: string, path: string): string {
   return new URL(path.replace(/^\//, ''), `${baseUrl.replace(/\/+$/, '')}/`).toString()
 }
 
-async function postJson<T>(url: string, apiKey: string, body: unknown): Promise<T> {
+async function postJson<T>(
+  url: string,
+  apiKey: string,
+  body: unknown,
+  extraHeaders?: Record<string, string>,
+  useBearerAuth = true
+): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      ...extraHeaders,
+      ...(useBearerAuth && !extraHeaders?.Authorization ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
     body: JSON.stringify(body),
   })
@@ -157,21 +227,21 @@ function getChatContent(response: ChatCompletionResponse): string {
   return response.choices?.[0]?.message?.content?.trim() || ''
 }
 
-function getResponseText(response: OpenAiResponse): string {
-  if (response.output_text?.trim()) return response.output_text.trim()
-
-  const outputText = response.output
-    ?.flatMap(item => item.content || [])
-    .filter(content => content.type === 'output_text' && typeof content.text === 'string')
-    .map(content => content.text?.trim() || '')
+function getGeminiText(response: GeminiGenerateContentResponse): string {
+  const parts = response.candidates?.[0]?.content?.parts || []
+  return parts
+    .map(part => part.text?.trim() || '')
     .filter(Boolean)
     .join('\n\n')
-
-  return outputText || ''
 }
 
-function detectWebSearchUsage(response: OpenAiResponse): boolean {
-  return Array.isArray(response.output) && response.output.some(item => item.type === 'web_search_call')
+function detectGeminiWebSearch(response: GeminiGenerateContentResponse, requested: boolean): boolean {
+  const candidate = response.candidates?.[0]
+  if (!candidate) return requested
+  return requested && Boolean(
+    candidate.groundingMetadata?.groundingChunks?.length ||
+    candidate.groundingMetadata?.webSearchQueries?.length
+  )
 }
 
 function getTodayContext(): string {
@@ -239,7 +309,7 @@ function parseExtractedTodos(content: string, fallbackText: string): ExtractedTo
     if (!Array.isArray(parsed)) return buildFallbackTodos(fallbackText)
 
     const todos = parsed
-      .map(item => {
+      .map((item): ExtractedTodo | null => {
         if (!item || typeof item !== 'object') return null
         const text = typeof (item as { text?: unknown }).text === 'string'
           ? (item as { text: string }).text.trim()
@@ -281,113 +351,398 @@ function sanitizeChatHistory(history?: ChatMessage[]): ChatMessage[] {
   )
 }
 
-export async function extractTodosWithDeepSeek(
-  env: AiEnv,
-  text: string,
-  categories?: string[]
-): Promise<ExtractedTodo[]> {
-  const apiKey = getRequiredEnv(env.DEEPSEEK_API_KEY, 'DeepSeek API key')
-  const response = await postJson<ChatCompletionResponse>(
-    buildApiUrl(env.DEEPSEEK_BASE_URL || DEFAULT_DEEPSEEK_BASE_URL, 'chat/completions'),
-    apiKey,
-    {
-      model: 'deepseek-chat',
-      messages: [
-        { role: 'system', content: buildExtractPrompt(categories) },
-        { role: 'user', content: text },
-      ],
-    }
-  )
-
-  return parseExtractedTodos(getChatContent(response) || '[]', text)
+function createFeatureCapability(
+  supportsWebSearch: boolean,
+  supportsReasoning: boolean
+): AiFeatureCapability {
+  return {
+    supportsReasoning,
+    supportsWebSearch,
+    isDefault: false,
+  }
 }
 
-export async function chatWithDeepSeek(
+function withDefaults(models: AiModelDescriptor[]): AiModelDescriptor[] {
+  const featureOrder: Record<AiFeature, AiModelId[]> = {
+    chat: ['deepseek', 'gemini', 'kimi'],
+    logAnalysis: ['gemini', 'kimi', 'deepseek'],
+    extractTodos: ['deepseek', 'gemini', 'kimi'],
+    polishIdea: ['deepseek', 'gemini', 'kimi'],
+  }
+
+  const cloned = models.map(model => ({
+    ...model,
+    features: Object.fromEntries(
+      Object.entries(model.features).map(([key, capability]) => [key, { ...capability! }])
+    ) as AiModelDescriptor['features']
+  }))
+
+  ;(Object.keys(featureOrder) as AiFeature[]).forEach(feature => {
+    const defaultModelId = featureOrder[feature].find(modelId => cloned.some(model => model.id === modelId && model.features[feature]))
+    if (!defaultModelId) return
+    const target = cloned.find(model => model.id === defaultModelId)
+    if (target?.features[feature]) {
+      target.features[feature]!.isDefault = true
+    }
+  })
+
+  return cloned
+}
+
+function getEnabledModels(env: AiEnv): AiModelDescriptor[] {
+  const models: AiModelDescriptor[] = []
+
+  if (hasText(env.DEEPSEEK_API_KEY)) {
+    const supportsReasoning = hasText(env.DEEPSEEK_REASONING_MODEL) || hasText(env.DEEPSEEK_CHAT_REASONING_MODEL) || hasText(env.DEEPSEEK_LOG_REASONING_MODEL)
+    models.push({
+      id: 'deepseek',
+      label: 'DeepSeek',
+      provider: 'deepseek',
+      features: {
+        chat: createFeatureCapability(false, supportsReasoning),
+        logAnalysis: createFeatureCapability(false, supportsReasoning),
+        extractTodos: createFeatureCapability(false, false),
+        polishIdea: createFeatureCapability(false, false),
+      }
+    })
+  }
+
+  if (hasText(env.GEMINI_API_KEY)) {
+    models.push({
+      id: 'gemini',
+      label: 'Gemini',
+      provider: 'gemini',
+      features: {
+        chat: createFeatureCapability(true, true),
+        logAnalysis: createFeatureCapability(true, true),
+        extractTodos: createFeatureCapability(false, false),
+        polishIdea: createFeatureCapability(false, false),
+      }
+    })
+  }
+
+  const hasKimiModels = [
+    env.KIMI_MODEL,
+    env.KIMI_CHAT_MODEL,
+    env.KIMI_LOG_MODEL,
+    env.KIMI_EXTRACT_MODEL,
+    env.KIMI_POLISH_MODEL,
+  ].some(hasText)
+
+  if (hasText(env.KIMI_API_KEY) && hasKimiModels) {
+    const supportsReasoning = hasText(env.KIMI_REASONING_MODEL) || hasText(env.KIMI_CHAT_REASONING_MODEL) || hasText(env.KIMI_LOG_REASONING_MODEL)
+    models.push({
+      id: 'kimi',
+      label: 'Kimi',
+      provider: 'kimi',
+      features: {
+        chat: createFeatureCapability(false, supportsReasoning),
+        logAnalysis: createFeatureCapability(false, supportsReasoning),
+        extractTodos: createFeatureCapability(false, false),
+        polishIdea: createFeatureCapability(false, false),
+      }
+    })
+  }
+
+  return withDefaults(models)
+}
+
+function getFeatureCapability(model: AiModelDescriptor, feature: AiFeature): AiFeatureCapability | null {
+  return model.features[feature] || null
+}
+
+function resolveModel(env: AiEnv, requestedModelId: string | undefined, feature: AiFeature): AiModelDescriptor {
+  const models = getEnabledModels(env)
+  if (models.length === 0) {
+    throw new Error('No AI providers configured')
+  }
+
+  if (requestedModelId) {
+    const requested = models.find(model => model.id === requestedModelId)
+    if (!requested) throw new Error(`Unsupported model: ${requestedModelId}`)
+    if (!getFeatureCapability(requested, feature)) throw new Error(`Model ${requested.label} does not support ${feature}`)
+    return requested
+  }
+
+  const defaultModel = models.find(model => model.features[feature]?.isDefault)
+  if (defaultModel) return defaultModel
+
+  const firstAvailable = models.find(model => getFeatureCapability(model, feature))
+  if (!firstAvailable) {
+    throw new Error(`No AI providers support ${feature}`)
+  }
+  return firstAvailable
+}
+
+function resolveProviderModelName(
   env: AiEnv,
-  text: string,
+  provider: AiProvider,
+  feature: AiFeature,
+  reasoningEnabled: boolean
+): string {
+  switch (provider) {
+    case 'deepseek': {
+      if (feature === 'chat') {
+        return reasoningEnabled
+          ? env.DEEPSEEK_CHAT_REASONING_MODEL || env.DEEPSEEK_REASONING_MODEL || env.DEEPSEEK_CHAT_MODEL || env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL
+          : env.DEEPSEEK_CHAT_MODEL || env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL
+      }
+      if (feature === 'logAnalysis') {
+        return reasoningEnabled
+          ? env.DEEPSEEK_LOG_REASONING_MODEL || env.DEEPSEEK_REASONING_MODEL || env.DEEPSEEK_LOG_MODEL || env.DEEPSEEK_CHAT_MODEL || env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL
+          : env.DEEPSEEK_LOG_MODEL || env.DEEPSEEK_CHAT_MODEL || env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL
+      }
+      if (feature === 'extractTodos') {
+        return env.DEEPSEEK_EXTRACT_MODEL || env.DEEPSEEK_CHAT_MODEL || env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL
+      }
+      return env.DEEPSEEK_POLISH_MODEL || env.DEEPSEEK_CHAT_MODEL || env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL
+    }
+    case 'gemini': {
+      if (feature === 'chat') {
+        return reasoningEnabled
+          ? env.GEMINI_CHAT_REASONING_MODEL || env.GEMINI_REASONING_MODEL || env.GEMINI_CHAT_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+          : env.GEMINI_CHAT_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+      }
+      if (feature === 'logAnalysis') {
+        return reasoningEnabled
+          ? env.GEMINI_LOG_REASONING_MODEL || env.GEMINI_REASONING_MODEL || env.GEMINI_LOG_MODEL || env.GEMINI_CHAT_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+          : env.GEMINI_LOG_MODEL || env.GEMINI_CHAT_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+      }
+      if (feature === 'extractTodos') {
+        return env.GEMINI_EXTRACT_MODEL || env.GEMINI_CHAT_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+      }
+      return env.GEMINI_POLISH_MODEL || env.GEMINI_CHAT_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+    }
+    case 'kimi': {
+      const fallback = env.KIMI_MODEL || env.KIMI_CHAT_MODEL || env.KIMI_LOG_MODEL
+      if (!hasText(fallback)) {
+        throw new Error('Kimi model name missing')
+      }
+      if (feature === 'chat') {
+        return reasoningEnabled
+          ? env.KIMI_CHAT_REASONING_MODEL || env.KIMI_REASONING_MODEL || env.KIMI_CHAT_MODEL || env.KIMI_MODEL || fallback
+          : env.KIMI_CHAT_MODEL || env.KIMI_MODEL || fallback
+      }
+      if (feature === 'logAnalysis') {
+        return reasoningEnabled
+          ? env.KIMI_LOG_REASONING_MODEL || env.KIMI_REASONING_MODEL || env.KIMI_LOG_MODEL || env.KIMI_CHAT_MODEL || env.KIMI_MODEL || fallback
+          : env.KIMI_LOG_MODEL || env.KIMI_CHAT_MODEL || env.KIMI_MODEL || fallback
+      }
+      if (feature === 'extractTodos') {
+        return env.KIMI_EXTRACT_MODEL || env.KIMI_CHAT_MODEL || env.KIMI_MODEL || fallback
+      }
+      return env.KIMI_POLISH_MODEL || env.KIMI_CHAT_MODEL || env.KIMI_MODEL || fallback
+    }
+  }
+}
+
+async function generateCompatibleText(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  userText: string,
   history?: ChatMessage[],
-  todoContext?: string
+  temperature = 0.7
 ): Promise<string> {
-  const apiKey = getRequiredEnv(env.DEEPSEEK_API_KEY, 'DeepSeek API key')
   const response = await postJson<ChatCompletionResponse>(
-    buildApiUrl(env.DEEPSEEK_BASE_URL || DEFAULT_DEEPSEEK_BASE_URL, 'chat/completions'),
+    buildApiUrl(baseUrl, 'chat/completions'),
     apiKey,
     {
-      model: 'deepseek-chat',
+      model,
       messages: [
-        { role: 'system', content: buildChatPrompt(todoContext) },
+        { role: 'system', content: systemPrompt },
         ...sanitizeChatHistory(history),
-        { role: 'user', content: text },
+        { role: 'user', content: userText },
       ],
+      temperature,
     }
   )
 
   return getChatContent(response)
 }
 
-export async function analyzeLogWithOpenAI(
+function buildGeminiContents(history: ChatMessage[] | undefined, userText: string) {
+  const sanitized = sanitizeChatHistory(history)
+  return [
+    ...sanitized.map(message => ({
+      role: message.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: message.content }],
+    })),
+    {
+      role: 'user',
+      parts: [{ text: userText }],
+    }
+  ]
+}
+
+async function generateGeminiText(
+  env: AiEnv,
+  model: string,
+  systemPrompt: string,
+  userText: string,
+  history?: ChatMessage[],
+  options?: { useWebSearch?: boolean; reasoningEnabled?: boolean; temperature?: number }
+): Promise<{ content: string; usedWebSearch: boolean }> {
+  const apiKey = getRequiredEnv(env.GEMINI_API_KEY, 'Gemini API key')
+  const response = await postJson<GeminiGenerateContentResponse>(
+    buildApiUrl(env.GEMINI_BASE_URL || DEFAULT_GEMINI_BASE_URL, `models/${model}:generateContent`),
+    apiKey,
+    {
+      systemInstruction: {
+        parts: [{ text: systemPrompt }],
+      },
+      contents: buildGeminiContents(history, userText),
+      generationConfig: {
+        temperature: options?.temperature ?? 0.7,
+        thinkingConfig: {
+          thinkingBudget: options?.reasoningEnabled ? GEMINI_REASONING_BUDGET : 0,
+        },
+      },
+      ...(options?.useWebSearch ? {
+        tools: [{ googleSearch: {} }],
+      } : {}),
+    },
+    { 'x-goog-api-key': apiKey },
+    false
+  )
+
+  return {
+    content: getGeminiText(response),
+    usedWebSearch: detectGeminiWebSearch(response, Boolean(options?.useWebSearch)),
+  }
+}
+
+async function generateText(env: AiEnv, modelId: string | undefined, options: GenerateTextOptions): Promise<{ content: string; usedWebSearch: boolean; model: AiModelDescriptor }> {
+  const model = resolveModel(env, modelId, options.feature)
+  const featureCapability = getFeatureCapability(model, options.feature)
+  const useWebSearch = Boolean(options.useWebSearch && featureCapability?.supportsWebSearch)
+  const reasoningEnabled = Boolean(options.reasoningEnabled && featureCapability?.supportsReasoning)
+  const resolvedModelName = resolveProviderModelName(env, model.provider, options.feature, reasoningEnabled)
+
+  switch (model.provider) {
+    case 'deepseek': {
+      const content = await generateCompatibleText(
+        env.DEEPSEEK_BASE_URL || DEFAULT_DEEPSEEK_BASE_URL,
+        getRequiredEnv(env.DEEPSEEK_API_KEY, 'DeepSeek API key'),
+        resolvedModelName,
+        options.systemPrompt,
+        options.userText,
+        options.history,
+        options.temperature
+      )
+      return { content, usedWebSearch: false, model }
+    }
+    case 'kimi': {
+      const content = await generateCompatibleText(
+        env.KIMI_BASE_URL || DEFAULT_KIMI_BASE_URL,
+        getRequiredEnv(env.KIMI_API_KEY, 'Kimi API key'),
+        resolvedModelName,
+        options.systemPrompt,
+        options.userText,
+        options.history,
+        options.temperature
+      )
+      return { content, usedWebSearch: false, model }
+    }
+    case 'gemini': {
+      const result = await generateGeminiText(
+        env,
+        resolvedModelName,
+        options.systemPrompt,
+        options.userText,
+        options.history,
+        {
+          useWebSearch,
+          reasoningEnabled,
+          temperature: options.temperature,
+        }
+      )
+      return { content: result.content, usedWebSearch: result.usedWebSearch, model }
+    }
+  }
+}
+
+export function listAvailableModels(env: AiEnv): AiModelDescriptor[] {
+  return getEnabledModels(env)
+}
+
+export async function extractTodosWithModel(
+  env: AiEnv,
+  text: string,
+  categories?: string[],
+  modelId?: string
+): Promise<ExtractedTodo[]> {
+  const result = await generateText(env, modelId, {
+    feature: 'extractTodos',
+    systemPrompt: buildExtractPrompt(categories),
+    userText: text,
+    temperature: 0.2,
+  })
+
+  return parseExtractedTodos(result.content || '[]', text)
+}
+
+export async function chatWithModel(
+  env: AiEnv,
+  text: string,
+  history?: ChatMessage[],
+  todoContext?: string,
+  modelId?: string,
+  options?: { useWebSearch?: boolean; reasoningEnabled?: boolean }
+): Promise<string> {
+  const result = await generateText(env, modelId, {
+    feature: 'chat',
+    systemPrompt: buildChatPrompt(todoContext),
+    userText: text,
+    history,
+    useWebSearch: options?.useWebSearch,
+    reasoningEnabled: options?.reasoningEnabled,
+    temperature: 0.7,
+  })
+
+  return result.content
+}
+
+export async function analyzeLogWithModel(
   env: AiEnv,
   text: string,
   actionType: LogAnalysisAction,
   context?: AnalyzeLogContext,
   history?: ChatMessage[],
   followUp?: string,
+  modelId?: string,
   options?: AnalyzeLogOptions
 ): Promise<LogAnalysisResult> {
-  const apiKey = getRequiredEnv(env.OPENAI_API_KEY, 'OpenAI API key')
-  const useWebSearch = Boolean(options?.useWebSearch)
-  const forceWebSearch = Boolean(options?.forceWebSearch)
-  const response = await postJson<OpenAiResponse>(
-    buildApiUrl(env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL, 'responses'),
-    apiKey,
-    {
-      model: env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL,
-      instructions: `${buildLogAnalysisPrompt(actionType, context)}\n\n当前聚焦的原始日志：\n${text}`,
-      input: [
-        ...sanitizeChatHistory(history),
-        {
-          role: 'user',
-          content: followUp
-            ? `请继续围绕原始日志回应这次追问：\n${followUp}`
-            : '请先对这条日志给出第一轮分析。',
-        },
-      ],
-      temperature: 0.7,
-      truncation: 'auto',
-      ...(useWebSearch ? {
-        tools: [{
-          type: OPENAI_WEB_SEARCH_TOOL,
-          search_context_size: 'medium',
-        }],
-        tool_choice: forceWebSearch ? { type: OPENAI_WEB_SEARCH_TOOL } : 'auto',
-      } : {}),
-    }
-  )
+  const result = await generateText(env, modelId, {
+    feature: 'logAnalysis',
+    systemPrompt: `${buildLogAnalysisPrompt(actionType, context)}\n\n当前聚焦的原始日志：\n${text}`,
+    userText: followUp
+      ? `请继续围绕原始日志回应这次追问：\n${followUp}`
+      : '请先对这条日志给出第一轮分析。',
+    history,
+    useWebSearch: options?.useWebSearch || options?.forceWebSearch,
+    reasoningEnabled: options?.reasoningEnabled,
+    temperature: 0.7,
+  })
 
   return {
-    content: getResponseText(response) || 'AI 暂时没有给出内容，请稍后重试。',
-    usedWebSearch: detectWebSearchUsage(response),
+    content: result.content || 'AI 暂时没有给出内容，请稍后重试。',
+    usedWebSearch: result.usedWebSearch,
+    modelId: result.model.id,
+    modelLabel: result.model.label,
   }
 }
 
-export async function polishIdeaWithDeepSeek(env: AiEnv, text: string): Promise<string> {
-  const apiKey = getRequiredEnv(env.DEEPSEEK_API_KEY, 'DeepSeek API key')
-  const response = await postJson<ChatCompletionResponse>(
-    buildApiUrl(env.DEEPSEEK_BASE_URL || DEFAULT_DEEPSEEK_BASE_URL, 'chat/completions'),
-    apiKey,
-    {
-      model: 'deepseek-chat',
-      messages: [
-        {
-          role: 'system',
-          content: '你是一个精简高效的个人助理。请将用户杂乱的想法整理成结构化、美观的 Markdown 笔记，并添加合适的 Emoji。',
-        },
-        { role: 'user', content: text },
-      ],
-    }
-  )
+export async function polishIdeaWithModel(env: AiEnv, text: string, modelId?: string): Promise<string> {
+  const result = await generateText(env, modelId, {
+    feature: 'polishIdea',
+    systemPrompt: '你是一个精简高效的个人助理。请将用户杂乱的想法整理成结构化、美观的 Markdown 笔记，并添加合适的 Emoji。',
+    userText: text,
+    temperature: 0.5,
+  })
 
-  return getChatContent(response)
+  return result.content
 }
 
 export async function readJson<T>(request: Request): Promise<T> {

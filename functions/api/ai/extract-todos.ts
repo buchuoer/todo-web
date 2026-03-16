@@ -1,8 +1,9 @@
-import { extractTodosWithDeepSeek, jsonData, jsonError, readJson, type AiEnv } from '../../../server/aiProxy'
+import { extractTodosWithModel, jsonData, jsonError, readJson, type AiEnv } from '../../../server/aiProxy'
 
 interface ExtractTodosRequest {
   text?: string
   categories?: string[]
+  modelId?: string
 }
 
 export async function onRequestPost(context: { request: Request; env: AiEnv }) {
@@ -15,7 +16,12 @@ export async function onRequestPost(context: { request: Request; env: AiEnv }) {
 
     if (!text) return jsonError('400 text is required', 400)
 
-    const data = await extractTodosWithDeepSeek(context.env, text, categories)
+    const data = await extractTodosWithModel(
+      context.env,
+      text,
+      categories,
+      typeof body.modelId === 'string' ? body.modelId : undefined
+    )
     return jsonData(data)
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : 'AI 提取失败')

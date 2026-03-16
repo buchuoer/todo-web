@@ -5,7 +5,17 @@ import {
   Check, Moon, Sun, BarChart3, GripVertical, X, Undo2, Bell, ChevronLeft, ChevronRight,
   Download, Upload, LogOut, RefreshCw, WifiOff, Cloud, Settings, Pencil
 } from 'lucide-react'
-import { extractTodos, chatWithAI, analyzeLogWithAI, type LogAnalysisAction, type LogAnalysisMessage } from './services/ai'
+import {
+  extractTodos,
+  chatWithAI,
+  analyzeLogWithAI,
+  fetchAiModels,
+  type AiFeature,
+  type AiModelDescriptor,
+  type AiModelId,
+  type LogAnalysisAction,
+  type LogAnalysisMessage
+} from './services/ai'
 import { signIn, signUp, signOut, onAuthStateChange } from './services/auth'
 import { pushTodos, pushLogs, pushTags, fetchTodos, fetchLogs, fetchTags, subscribeTodos, subscribeLogs, subscribeTags } from './services/sync'
 import './App.css'
@@ -34,6 +44,9 @@ interface LogInsightThread {
   updatedAt: string
   sourceMode: 'local' | 'web'
   usedWebSearch: boolean
+  modelId?: AiModelId
+  modelLabel?: string
+  reasoningEnabled?: boolean
   error?: string
 }
 
@@ -83,6 +96,8 @@ const LOG_DRAFT_KEY = 'minimus-log-draft'
 const LOG_INSIGHTS_STORAGE_KEY = 'minimus-log-insights'
 const DARK_MODE_KEY = 'minimus-dark-mode'
 const NOTIFICATION_SETTINGS_KEY = 'minimus-notification-settings'
+const AI_CHAT_MODEL_KEY = 'minimus-ai-chat-model'
+const AI_LOG_MODEL_KEY = 'minimus-ai-log-model'
 const MIN_LOG_LENGTH = 5
 const BACKUP_SCHEMA_VERSION = 2
 const LOG_INSIGHT_ACTIONS: { key: LogAnalysisAction; label: string }[] = [
@@ -93,6 +108,21 @@ const LOG_INSIGHT_ACTIONS: { key: LogAnalysisAction; label: string }[] = [
 
 const isLogAnalysisAction = (value: unknown): value is LogAnalysisAction =>
   value === 'deep_dive' || value === 'critique' || value === 'organize'
+
+const AI_FEATURE_LABELS: Record<AiFeature, string> = {
+  chat: 'AI 对话',
+  logAnalysis: '日志分析',
+  extractTodos: '待办提取',
+  polishIdea: '想法整理',
+}
+
+const getModelFeatureCapability = (model: AiModelDescriptor | null | undefined, feature: AiFeature) =>
+  model?.features?.[feature]
+
+const getDefaultModelId = (models: AiModelDescriptor[], feature: AiFeature): AiModelId | '' =>
+  models.find(model => getModelFeatureCapability(model, feature)?.isDefault)?.id
+  || models.find(model => Boolean(getModelFeatureCapability(model, feature)))?.id
+  || ''
 
 const normalizeInsightMessages = (rawMessages: unknown, fallbackTime: string): LogInsightMessage[] => {
   if (!Array.isArray(rawMessages)) return []
@@ -121,6 +151,9 @@ const normalizeInsightThread = (actionType: LogAnalysisAction, rawThread: unknow
     error?: unknown
     sourceMode?: unknown
     usedWebSearch?: unknown
+    modelId?: unknown
+    modelLabel?: unknown
+    reasoningEnabled?: unknown
     content?: unknown
   }
   const updatedAt = typeof thread.updatedAt === 'string' && thread.updatedAt.trim()
@@ -140,6 +173,9 @@ const normalizeInsightThread = (actionType: LogAnalysisAction, rawThread: unknow
     updatedAt,
     sourceMode: thread.sourceMode === 'web' ? 'web' : 'local',
     usedWebSearch: Boolean(thread.usedWebSearch),
+    modelId: thread.modelId === 'deepseek' || thread.modelId === 'gemini' || thread.modelId === 'kimi' ? thread.modelId : undefined,
+    modelLabel: typeof thread.modelLabel === 'string' && thread.modelLabel.trim() ? thread.modelLabel.trim() : undefined,
+    reasoningEnabled: Boolean(thread.reasoningEnabled),
     error: typeof thread.error === 'string' && thread.error.trim() ? thread.error : undefined
   }
 }
@@ -162,6 +198,9 @@ const normalizeLogInsights = (raw: unknown): Record<number, LogInsightState> => 
       content?: unknown
       sourceMode?: unknown
       usedWebSearch?: unknown
+      modelId?: unknown
+      modelLabel?: unknown
+      reasoningEnabled?: unknown
       error?: unknown
     }
 
@@ -350,6 +389,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<'todo' | 'logs' | 'calendar'>('todo')
   const [isAiLoading, setIsAiLoading] = useState(false)
   const [selectedCategory, setSelectedCategory] = useState('全部')
+  const [draftTodoCategory, setDraftTodoCategory] = useState('未分类')
   const [showCategorySelect, setShowCategorySelect] = useState(false)
   const [selectedPriority, setSelectedPriority] = useState<'high' | 'medium' | 'low'>('medium')
   const [showPrioritySelect, setShowPrioritySelect] = useState(false)
@@ -394,6 +434,28 @@ function App() {
   })
   const [logSearchQuery, setLogSearchQuery] = useState('')
   const [isLogAiLoading, setIsLogAiLoading] = useState(false)
+  const [aiModels, setAiModels] = useState<AiModelDescriptor[]>([])
+  const [aiModelsError, setAiModelsError] = useState('')
+  const [selectedChatModelId, setSelectedChatModelId] = useState<AiModelId | ''>(() => {
+    try {
+      const saved = localStorage.getItem(AI_CHAT_MODEL_KEY)
+      return saved === 'deepseek' || saved === 'gemini' || saved === 'kimi' ? saved : ''
+    } catch {
+      return ''
+    }
+  })
+  const [selectedLogModelId, setSelectedLogModelId] = useState<AiModelId | ''>(() => {
+    try {
+      const saved = localStorage.getItem(AI_LOG_MODEL_KEY)
+      return saved === 'deepseek' || saved === 'gemini' || saved === 'kimi' ? saved : ''
+    } catch {
+      return ''
+    }
+  })
+  const [chatWebSearchEnabled, setChatWebSearchEnabled] = useState(false)
+  const [chatReasoningEnabled, setChatReasoningEnabled] = useState(false)
+  const [logWebSearchEnabled, setLogWebSearchEnabled] = useState(false)
+  const [logReasoningEnabled, setLogReasoningEnabled] = useState(false)
   const [editingLogId, setEditingLogId] = useState<number | null>(null)
   const [editContent, setEditContent] = useState('')
   const [logInsights, setLogInsights] = useState<Record<number, LogInsightState>>(() => {
@@ -469,6 +531,13 @@ function App() {
   })
   tagConfig['全部'] = { color: '#8E8E93', bgColor: '#F2F2F7', borderColor: 'rgba(142, 142, 147, 0.3)' }
 
+  const chatModels = aiModels.filter(model => Boolean(getModelFeatureCapability(model, 'chat')))
+  const logAnalysisModels = aiModels.filter(model => Boolean(getModelFeatureCapability(model, 'logAnalysis')))
+  const selectedChatModel = chatModels.find(model => model.id === selectedChatModelId) || null
+  const selectedLogModel = logAnalysisModels.find(model => model.id === selectedLogModelId) || null
+  const chatModelCapability = getModelFeatureCapability(selectedChatModel, 'chat')
+  const logModelCapability = getModelFeatureCapability(selectedLogModel, 'logAnalysis')
+
   // === 标签管理函数 ===
   const addTag = (name: string, color: string) => {
     if (!canEdit) return
@@ -500,6 +569,7 @@ function App() {
         setTodos(prevTodos => prevTodos.map(todo =>
           todo.category === tag.name ? { ...todo, category: newName } : todo
         ))
+        setDraftTodoCategory(prevCategory => prevCategory === tag.name ? newName : prevCategory)
       }
       return { ...tag, name: newName, color: newColor, ...colors }
     }))
@@ -516,6 +586,7 @@ function App() {
     ))
     setTags(prev => prev.filter(t => t.id !== id))
     if (selectedCategory === tag.name) setSelectedCategory('全部')
+    if (draftTodoCategory === tag.name) setDraftTodoCategory('未分类')
   }
 
   // === 副作用 ===
@@ -618,6 +689,72 @@ function App() {
       }
     } catch {}
   }, [logInsights])
+
+  useEffect(() => {
+    let cancelled = false
+
+    fetchAiModels()
+      .then(models => {
+        if (cancelled) return
+        setAiModels(models)
+        setAiModelsError(models.length === 0 ? '当前未配置可用 AI 模型' : '')
+      })
+      .catch(error => {
+        if (cancelled) return
+        setAiModels([])
+        setAiModelsError(error instanceof Error ? error.message : 'AI 模型列表加载失败')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (chatModels.length === 0) {
+      if (selectedChatModelId) setSelectedChatModelId('')
+      return
+    }
+    if (!selectedChatModel) {
+      setSelectedChatModelId(getDefaultModelId(chatModels, 'chat'))
+    }
+  }, [chatModels, selectedChatModel, selectedChatModelId])
+
+  useEffect(() => {
+    if (logAnalysisModels.length === 0) {
+      if (selectedLogModelId) setSelectedLogModelId('')
+      return
+    }
+    if (!selectedLogModel) {
+      setSelectedLogModelId(getDefaultModelId(logAnalysisModels, 'logAnalysis'))
+    }
+  }, [logAnalysisModels, selectedLogModel, selectedLogModelId])
+
+  useEffect(() => {
+    try {
+      if (selectedChatModelId) localStorage.setItem(AI_CHAT_MODEL_KEY, selectedChatModelId)
+      else localStorage.removeItem(AI_CHAT_MODEL_KEY)
+    } catch {}
+  }, [selectedChatModelId])
+
+  useEffect(() => {
+    try {
+      if (selectedLogModelId) localStorage.setItem(AI_LOG_MODEL_KEY, selectedLogModelId)
+      else localStorage.removeItem(AI_LOG_MODEL_KEY)
+    } catch {}
+  }, [selectedLogModelId])
+
+  useEffect(() => {
+    const capability = getModelFeatureCapability(selectedChatModel, 'chat')
+    if (!capability?.supportsWebSearch && chatWebSearchEnabled) setChatWebSearchEnabled(false)
+    if (!capability?.supportsReasoning && chatReasoningEnabled) setChatReasoningEnabled(false)
+  }, [selectedChatModel, chatWebSearchEnabled, chatReasoningEnabled])
+
+  useEffect(() => {
+    const capability = getModelFeatureCapability(selectedLogModel, 'logAnalysis')
+    if (!capability?.supportsWebSearch && logWebSearchEnabled) setLogWebSearchEnabled(false)
+    if (!capability?.supportsReasoning && logReasoningEnabled) setLogReasoningEnabled(false)
+  }, [selectedLogModel, logWebSearchEnabled, logReasoningEnabled])
 
   // 暗黑模式
   useEffect(() => {
@@ -941,6 +1078,10 @@ function App() {
     if (!logInput.trim() || isLogAiLoading) return
     const userMessage = logInput.replace(/^@AI\s*/, '').trim()
     if (!userMessage) return
+    if (!selectedChatModelId) {
+      addLog('ai_reply', '❌ 当前没有可用的 AI 对话模型，请先在服务端配置 Gemini / DeepSeek / Kimi。')
+      return
+    }
     setIsLogAiLoading(true)
 
     const recentLogs = logs.slice(-10).filter(l => l.type === 'ai_chat' || l.type === 'ai_reply')
@@ -953,7 +1094,11 @@ function App() {
 
     try {
       addLog('ai_chat', userMessage)
-      const aiResponse = await chatWithAI(userMessage, history, todoContext)
+      const aiResponse = await chatWithAI(userMessage, history, todoContext, {
+        modelId: selectedChatModelId,
+        useWebSearch: chatWebSearchEnabled,
+        reasoningEnabled: chatReasoningEnabled
+      })
       if (aiResponse) addLog('ai_reply', aiResponse)
       setLogInput('')
     } catch (error) {
@@ -982,12 +1127,17 @@ function App() {
     actionType: LogAnalysisAction,
     options?: { regenerate?: boolean; followUp?: string; useWebSearch?: boolean; forceWebSearch?: boolean }
   ) => {
+    if (!selectedLogModelId) return
     const currentState = logInsights[entry.id]
     const currentThread = currentState?.threads?.[actionType]
     if (currentThread?.status === 'loading') return
 
     const followUp = options?.followUp?.trim()
-    const shouldUseWebSearch = options?.useWebSearch ?? currentThread?.sourceMode === 'web'
+    const logCapability = getModelFeatureCapability(selectedLogModel, 'logAnalysis')
+    const shouldUseWebSearch = Boolean(
+      (options?.useWebSearch ?? (currentThread ? currentThread.sourceMode === 'web' : logWebSearchEnabled))
+      && logCapability?.supportsWebSearch
+    )
     const baseMessages = options?.regenerate ? [] : (currentThread?.messages || [])
     const nextMessages = followUp
       ? [...baseMessages, buildInsightMessage('user', followUp)]
@@ -1008,6 +1158,9 @@ function App() {
               updatedAt: new Date().toISOString(),
               sourceMode: shouldUseWebSearch ? 'web' : 'local',
               usedWebSearch: options?.regenerate ? false : (currentThread?.usedWebSearch || false),
+              modelId: selectedLogModelId,
+              modelLabel: selectedLogModel?.label,
+              reasoningEnabled: Boolean(logReasoningEnabled && logCapability?.supportsReasoning),
             }
           }
         }
@@ -1026,7 +1179,9 @@ function App() {
         followUp,
         {
           useWebSearch: shouldUseWebSearch,
-          forceWebSearch: options?.forceWebSearch
+          forceWebSearch: options?.forceWebSearch,
+          reasoningEnabled: Boolean(logReasoningEnabled && logCapability?.supportsReasoning),
+          modelId: selectedLogModelId
         }
       )
 
@@ -1048,6 +1203,9 @@ function App() {
                 updatedAt: new Date().toISOString(),
                 sourceMode: shouldUseWebSearch ? 'web' : 'local',
                 usedWebSearch: aiResponse.usedWebSearch,
+                modelId: aiResponse.modelId,
+                modelLabel: aiResponse.modelLabel,
+                reasoningEnabled: Boolean(logReasoningEnabled && logCapability?.supportsReasoning),
               }
             }
           }
@@ -1084,6 +1242,9 @@ function App() {
                 updatedAt: new Date().toISOString(),
                 sourceMode: shouldUseWebSearch ? 'web' : 'local',
                 usedWebSearch: currentThread?.usedWebSearch || false,
+                modelId: selectedLogModelId,
+                modelLabel: selectedLogModel?.label,
+                reasoningEnabled: Boolean(logReasoningEnabled && logCapability?.supportsReasoning),
                 error: errorMessage,
               }
             }
@@ -1094,6 +1255,7 @@ function App() {
   }
 
   const handleAnalyzeLog = async (entry: LogEntry, actionType: LogAnalysisAction) => {
+    if (!selectedLogModelId) return
     const existingThread = logInsights[entry.id]?.threads?.[actionType]
     if (existingThread?.messages.length) {
       setLogInsights(prev => ({
@@ -2056,8 +2218,7 @@ function App() {
                       if (e.nativeEvent.isComposing || e.keyCode === 229) return
                       e.preventDefault()
                       if (input.trim()) {
-                        const category = selectedCategory === '全部' ? '未分类' : selectedCategory
-                        addTodo(input, category, deadline || undefined, selectedPriority)
+                        addTodo(input, draftTodoCategory, deadline || undefined, selectedPriority)
                       }
                     }
                   }}
@@ -2073,10 +2234,10 @@ function App() {
                 <button
                   className={`category-btn ${showCategorySelect ? 'active' : ''}`}
                   onClick={() => setShowCategorySelect(!showCategorySelect)}
-                  title={selectedCategory !== '全部' ? `当前分类: ${selectedCategory}` : '选择分类'}
+                  title={draftTodoCategory !== '未分类' ? `当前分类: ${draftTodoCategory}` : '选择分类'}
                 >
                   <FolderOpen size={20} />
-                  {selectedCategory !== '全部' && <span className="category-indicator">{selectedCategory}</span>}
+                  {draftTodoCategory !== '未分类' && <span className="category-indicator">{draftTodoCategory}</span>}
                 </button>
                 <button
                   className={`priority-btn ${selectedPriority !== 'medium' ? 'active' : ''}`}
@@ -2090,7 +2251,7 @@ function App() {
                   <Calendar size={20} />
                 </button>
                 <button
-                  onClick={() => addTodo(input, selectedCategory === '全部' ? '未分类' : selectedCategory, deadline || undefined, selectedPriority)}
+                  onClick={() => addTodo(input, draftTodoCategory, deadline || undefined, selectedPriority)}
                   disabled={!canEdit || !input.trim()}
                   className={input.trim() && canEdit ? 'active' : ''}
                 >
@@ -2216,8 +2377,8 @@ function App() {
                   {tags.map(tag => (
                     <button
                       key={tag.id}
-                      className={selectedCategory === tag.name ? 'selected' : ''}
-                      onClick={() => { setSelectedCategory(tag.name); setShowCategorySelect(false) }}
+                      className={draftTodoCategory === tag.name ? 'selected' : ''}
+                      onClick={() => { setDraftTodoCategory(tag.name); setShowCategorySelect(false) }}
                     >
                       {tag.name}
                     </button>
@@ -2586,6 +2747,45 @@ function App() {
                     disabled={!canEdit || isLogAiLoading}
                     rows={4}
                   />
+                  <div className="ai-model-controls">
+                    <div className="ai-model-controls-header">
+                      <span className="ai-model-controls-title">AI 对话</span>
+                      {aiModelsError && <span className="ai-model-controls-error">{aiModelsError}</span>}
+                    </div>
+                    <div className="ai-model-controls-row">
+                      <select
+                        className="ai-model-select"
+                        value={selectedChatModelId}
+                        onChange={(e) => setSelectedChatModelId(e.target.value as AiModelId | '')}
+                        disabled={chatModels.length === 0}
+                      >
+                        <option value="">{chatModels.length === 0 ? '暂无可用模型' : '选择模型'}</option>
+                        {chatModels.map(model => (
+                          <option key={model.id} value={model.id}>
+                            {model.label}{model.features.chat?.isDefault ? ' · 默认' : ''}
+                          </option>
+                        ))}
+                      </select>
+                      {chatModelCapability?.supportsWebSearch && (
+                        <button
+                          className={`ai-toggle-chip ${chatWebSearchEnabled ? 'active' : ''}`}
+                          onClick={() => setChatWebSearchEnabled(prev => !prev)}
+                          type="button"
+                        >
+                          联网
+                        </button>
+                      )}
+                      {chatModelCapability?.supportsReasoning && (
+                        <button
+                          className={`ai-toggle-chip ${chatReasoningEnabled ? 'active' : ''}`}
+                          onClick={() => setChatReasoningEnabled(prev => !prev)}
+                          type="button"
+                        >
+                          思考模式
+                        </button>
+                      )}
+                    </div>
+                  </div>
                   <div className="log-actions">
                     <div className="log-hint-area">
                       <span className="log-hint">保存后可对单条日志发起 AI 深入分析</span>
@@ -2627,6 +2827,45 @@ function App() {
                     <X size={14} />
                   </button>
                 )}
+              </div>
+
+              <div className="log-analysis-controls">
+                <div className="log-analysis-controls-left">
+                  <span className="log-analysis-controls-title">日志分析</span>
+                  <select
+                    className="ai-model-select"
+                    value={selectedLogModelId}
+                    onChange={(e) => setSelectedLogModelId(e.target.value as AiModelId | '')}
+                    disabled={logAnalysisModels.length === 0}
+                  >
+                    <option value="">{logAnalysisModels.length === 0 ? '暂无可用模型' : '选择模型'}</option>
+                    {logAnalysisModels.map(model => (
+                      <option key={model.id} value={model.id}>
+                        {model.label}{model.features.logAnalysis?.isDefault ? ' · 默认' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="log-analysis-controls-right">
+                  {logModelCapability?.supportsWebSearch && (
+                    <button
+                      className={`ai-toggle-chip ${logWebSearchEnabled ? 'active' : ''}`}
+                      onClick={() => setLogWebSearchEnabled(prev => !prev)}
+                      type="button"
+                    >
+                      联网
+                    </button>
+                  )}
+                  {logModelCapability?.supportsReasoning && (
+                    <button
+                      className={`ai-toggle-chip ${logReasoningEnabled ? 'active' : ''}`}
+                      onClick={() => setLogReasoningEnabled(prev => !prev)}
+                      type="button"
+                    >
+                      思考模式
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="logs-list">
@@ -2673,7 +2912,7 @@ function App() {
                                     key={action.key}
                                     className={`log-ai-action-btn ${activeAction === action.key ? 'active' : ''}`}
                                     onClick={() => handleAnalyzeLog(entry, action.key)}
-                                    disabled={insightState?.threads?.[action.key]?.status === 'loading'}
+                                    disabled={!selectedLogModelId || insightState?.threads?.[action.key]?.status === 'loading'}
                                   >
                                     {insightState?.threads?.[action.key]?.status === 'loading'
                                       ? '分析中...'
@@ -2690,9 +2929,15 @@ function App() {
                                         <Sparkles size={14} />
                                         {getLogInsightLabel(insight.actionType)}
                                       </span>
+                                      {insight.modelLabel && (
+                                        <span className="log-insight-model-badge">{insight.modelLabel}</span>
+                                      )}
                                       <span className={`log-insight-source-badge ${insight.sourceMode}`}>
                                         {insight.usedWebSearch ? '已联网检索' : (insight.sourceMode === 'web' ? '联网模式' : '本地回答')}
                                       </span>
+                                      {insight.reasoningEnabled && (
+                                        <span className="log-insight-reasoning-badge">思考模式</span>
+                                      )}
                                     </div>
                                     <div className="log-insight-meta">
                                       <span className="log-insight-time">
@@ -2708,7 +2953,7 @@ function App() {
                                       <button
                                         className="log-insight-secondary-btn"
                                         onClick={() => handleWebSearchLogInsight(entry)}
-                                        disabled={insight.status === 'loading'}
+                                        disabled={insight.status === 'loading' || !logModelCapability?.supportsWebSearch}
                                       >
                                         联网重答
                                       </button>
@@ -2739,7 +2984,7 @@ function App() {
                                       value={logInsightInputs[entry.id] || ''}
                                       onChange={(e) => setLogInsightInputs(prev => ({ ...prev, [entry.id]: e.target.value }))}
                                       onKeyDown={(e) => handleInsightFollowUpKeyDown(entry, e)}
-                                      placeholder={insight.sourceMode === 'web'
+                                      placeholder={(logModelCapability?.supportsWebSearch && insight.sourceMode === 'web')
                                         ? '继续追问这条日志（当前联网模式），按 Enter 发送，Shift+Enter 换行'
                                         : '继续追问这条日志，按 Enter 发送，Shift+Enter 换行'}
                                       rows={2}
@@ -2751,7 +2996,7 @@ function App() {
                                       disabled={insight.status === 'loading' || !(logInsightInputs[entry.id] || '').trim()}
                                     >
                                       <Send size={14} />
-                                      {insight.sourceMode === 'web' ? '联网追问' : '发送'}
+                                      {(logModelCapability?.supportsWebSearch && insight.sourceMode === 'web') ? '联网追问' : '发送'}
                                     </button>
                                   </div>
                                 </div>
