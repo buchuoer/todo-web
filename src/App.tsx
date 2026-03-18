@@ -17,7 +17,21 @@ import {
   type LogAnalysisMessage
 } from './services/ai'
 import { signIn, signUp, signOut, onAuthStateChange } from './services/auth'
-import { pushTodos, pushLogs, pushTags, fetchTodos, fetchLogs, fetchTags, subscribeTodos, subscribeLogs, subscribeTags } from './services/sync'
+import {
+  pushTodos,
+  pushLogs,
+  pushTags,
+  pushImportantEvents,
+  fetchTodos,
+  fetchLogs,
+  fetchTags,
+  fetchImportantEvents,
+  subscribeTodos,
+  subscribeLogs,
+  subscribeTags,
+  subscribeImportantEvents,
+  type ImportantEvent as SyncedImportantEvent
+} from './services/sync'
 import './App.css'
 
 // 日志类型
@@ -64,6 +78,8 @@ interface Todo {
   priority: 'high' | 'medium' | 'low'
 }
 
+interface ImportantEvent extends SyncedImportantEvent {}
+
 interface UndoAction {
   type: 'delete' | 'toggle'
   todo: Todo
@@ -91,6 +107,7 @@ interface Tag {
 const STORAGE_KEY = 'minimus-todos'
 const LOGS_STORAGE_KEY = 'minimus-logs'
 const TAGS_STORAGE_KEY = 'minimus-tags'
+const IMPORTANT_EVENTS_STORAGE_KEY = 'minimus-important-events'
 const TODO_DRAFT_KEY = 'minimus-todo-draft'
 const LOG_DRAFT_KEY = 'minimus-log-draft'
 const LOG_INSIGHTS_STORAGE_KEY = 'minimus-log-insights'
@@ -99,7 +116,7 @@ const NOTIFICATION_SETTINGS_KEY = 'minimus-notification-settings'
 const AI_CHAT_MODEL_KEY = 'minimus-ai-chat-model'
 const AI_LOG_MODEL_KEY = 'minimus-ai-log-model'
 const MIN_LOG_LENGTH = 5
-const BACKUP_SCHEMA_VERSION = 2
+const BACKUP_SCHEMA_VERSION = 3
 const LOG_INSIGHT_ACTIONS: { key: LogAnalysisAction; label: string }[] = [
   { key: 'deep_dive', label: '深入聊聊' },
   { key: 'critique', label: '指出问题' },
@@ -245,6 +262,18 @@ const normalizeDeadline = (value: unknown): string | undefined => {
   return /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/.test(trimmed) ? trimmed : undefined
 }
 
+const normalizeEventDate = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : undefined
+}
+
+const isAbortError = (error: unknown) =>
+  error instanceof DOMException
+    ? error.name === 'AbortError'
+    : error instanceof Error && error.name === 'AbortError'
+
 // 计算剩余天数
 const getDaysLeft = (deadline: string): number => {
   const today = new Date()
@@ -305,6 +334,25 @@ const getDeadlineInfo = (deadline: string, completed: boolean) => {
   return { text: `${daysLeft} 天后到期`, className: 'deadline-normal' }
 }
 
+const getImportantEventStatus = (eventDate: string) => {
+  const days = getDaysLeft(eventDate)
+  if (days > 0) return { bucket: 'upcoming' as const, text: `还有 ${days} 天`, days }
+  if (days < 0) return { bucket: 'past' as const, text: `已过去 ${Math.abs(days)} 天`, days: Math.abs(days) }
+  return { bucket: 'today' as const, text: '就是今天', days: 0 }
+}
+
+const sortImportantEvents = (events: ImportantEvent[]) =>
+  [...events].sort((a, b) => {
+    const statusA = getImportantEventStatus(a.eventDate)
+    const statusB = getImportantEventStatus(b.eventDate)
+    const orderA = statusA.bucket === 'upcoming' ? 0 : statusA.bucket === 'today' ? 1 : 2
+    const orderB = statusB.bucket === 'upcoming' ? 0 : statusB.bucket === 'today' ? 1 : 2
+    if (orderA !== orderB) return orderA - orderB
+    if (statusA.bucket === 'upcoming') return statusA.days - statusB.days || a.eventDate.localeCompare(b.eventDate)
+    if (statusA.bucket === 'past') return statusA.days - statusB.days || b.eventDate.localeCompare(a.eventDate)
+    return a.eventDate.localeCompare(b.eventDate)
+  })
+
 // 标签色板
 const TAG_COLOR_PALETTE = ['#007AFF', '#34C759', '#FF9500', '#FF3B30', '#AF52DE', '#FF2D55', '#5AC8FA', '#5856D6', '#A2845E', '#8E8E93']
 
@@ -355,6 +403,7 @@ function App() {
   const syncTodosTimer = useRef<number | null>(null)
   const syncLogsTimer = useRef<number | null>(null)
   const syncTagsTimer = useRef<number | null>(null)
+  const syncImportantEventsTimer = useRef<number | null>(null)
 
   // === 核心状态 ===
   const [todos, setTodos] = useState<Todo[]>(() => {
@@ -390,6 +439,28 @@ function App() {
         return true
       })
     } catch { return DEFAULT_TAGS }
+  })
+  const [importantEvents, setImportantEvents] = useState<ImportantEvent[]>(() => {
+    try {
+      const saved = localStorage.getItem(IMPORTANT_EVENTS_STORAGE_KEY)
+      const parsed = saved ? JSON.parse(saved) : []
+      return Array.isArray(parsed)
+        ? sortImportantEvents(parsed.map((event: unknown) => {
+            if (!event || typeof event !== 'object') return null
+            const raw = event as Partial<ImportantEvent>
+            const title = typeof raw.title === 'string' ? raw.title.trim() : ''
+            const eventDate = normalizeEventDate(raw.eventDate)
+            if (!title || !eventDate) return null
+            return {
+              id: typeof raw.id === 'string' && raw.id.trim() ? raw.id : crypto.randomUUID(),
+              title,
+              eventDate,
+              createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
+              updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
+            }
+          }).filter(Boolean) as ImportantEvent[])
+        : []
+    } catch { return [] }
   })
   const [activeTab, setActiveTab] = useState<'todo' | 'logs' | 'calendar'>('todo')
   const [isAiLoading, setIsAiLoading] = useState(false)
@@ -474,6 +545,10 @@ function App() {
   const [logInsightInputs, setLogInsightInputs] = useState<Record<number, string>>({})
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const logChatAbortControllerRef = useRef<AbortController | null>(null)
+  const logChatRequestIdRef = useRef(0)
+  const logInsightAbortControllersRef = useRef<Record<string, AbortController>>({})
+  const logInsightRequestIdsRef = useRef<Record<string, number>>({})
   const [input, setInput] = useState(() => {
     try { return localStorage.getItem(TODO_DRAFT_KEY) || '' } catch { return '' }
   })
@@ -498,6 +573,9 @@ function App() {
 
   // 数据统计
   const [showStats, setShowStats] = useState(false)
+  const [importantEventTitle, setImportantEventTitle] = useState('')
+  const [importantEventDate, setImportantEventDate] = useState('')
+  const [editingImportantEventId, setEditingImportantEventId] = useState<string | null>(null)
 
   // 离线编辑保护：已登录 + 离线/同步失败时禁止编辑
   const canEdit = !user || (syncStatus !== 'offline' && syncStatus !== 'error')
@@ -542,6 +620,98 @@ function App() {
   const selectedLogModel = logAnalysisModels.find(model => model.id === selectedLogModelId) || null
   const chatModelCapability = getModelFeatureCapability(selectedChatModel, 'chat')
   const logModelCapability = getModelFeatureCapability(selectedLogModel, 'logAnalysis')
+  const importantEventCards = sortImportantEvents(importantEvents).map(event => ({
+    ...event,
+    status: getImportantEventStatus(event.eventDate)
+  }))
+
+  const createLogEntry = (type: LogEntry['type'], content: string): LogEntry | null => {
+    const trimmed = content.trim()
+    if (!trimmed) return null
+    return {
+      id: Math.floor(Date.now() * 1000 + Math.random() * 1000),
+      type,
+      content: trimmed,
+      createdAt: new Date().toISOString()
+    }
+  }
+
+  const appendLogEntry = (entry: LogEntry) => {
+    setLogs(prev => [...prev, entry])
+  }
+
+  const buildMainLogHistory = (entries: LogEntry[]) =>
+    entries
+      .filter(log => log.type === 'thought' || log.type === 'ai_chat' || log.type === 'ai_reply')
+      .slice(-10)
+      .map(log => ({
+        role: log.type === 'ai_reply' ? 'assistant' as const : 'user' as const,
+        content: log.content
+      }))
+
+  const getLogInsightRequestKey = (entryId: number, actionType: LogAnalysisAction) => `${entryId}:${actionType}`
+
+  const abortMainLogRequest = () => {
+    logChatAbortControllerRef.current?.abort()
+  }
+
+  const abortLogInsightRequest = (entryId: number, actionType?: LogAnalysisAction) => {
+    const keys = actionType
+      ? [getLogInsightRequestKey(entryId, actionType)]
+      : Object.keys(logInsightAbortControllersRef.current).filter(key => key.startsWith(`${entryId}:`))
+
+    keys.forEach(key => {
+      logInsightAbortControllersRef.current[key]?.abort()
+    })
+  }
+
+  const abortAllLogInsightRequests = () => {
+    Object.values(logInsightAbortControllersRef.current).forEach(controller => controller.abort())
+  }
+
+  const resetImportantEventForm = () => {
+    setImportantEventTitle('')
+    setImportantEventDate('')
+    setEditingImportantEventId(null)
+  }
+
+  const startEditImportantEvent = (event: ImportantEvent) => {
+    setEditingImportantEventId(event.id)
+    setImportantEventTitle(event.title)
+    setImportantEventDate(event.eventDate)
+  }
+
+  const saveImportantEvent = () => {
+    if (!canEdit) return
+    const title = importantEventTitle.trim()
+    const eventDate = normalizeEventDate(importantEventDate)
+    if (!title || !eventDate) return
+
+    if (editingImportantEventId) {
+      setImportantEvents(prev => sortImportantEvents(prev.map(event =>
+        event.id === editingImportantEventId
+          ? { ...event, title, eventDate, updatedAt: new Date().toISOString() }
+          : event
+      )))
+    } else {
+      const now = new Date().toISOString()
+      setImportantEvents(prev => sortImportantEvents([{
+        id: crypto.randomUUID(),
+        title,
+        eventDate,
+        createdAt: now,
+        updatedAt: now,
+      }, ...prev]))
+    }
+
+    resetImportantEventForm()
+  }
+
+  const deleteImportantEvent = (id: string) => {
+    if (!canEdit) return
+    setImportantEvents(prev => prev.filter(event => event.id !== id))
+    if (editingImportantEventId === id) resetImportantEventForm()
+  }
 
   // === 标签管理函数 ===
   const addTag = (name: string, color: string) => {
@@ -635,6 +805,18 @@ function App() {
     }
   }, [tags, user])
 
+  // 持久化重要事件
+  useEffect(() => {
+    try { localStorage.setItem(IMPORTANT_EVENTS_STORAGE_KEY, JSON.stringify(importantEvents)) } catch {}
+    if (user && !isRemoteUpdate.current) {
+      if (syncImportantEventsTimer.current) clearTimeout(syncImportantEventsTimer.current)
+      syncImportantEventsTimer.current = window.setTimeout(() => {
+        pushImportantEvents(importantEvents, user.id)
+          .catch((err) => console.warn('重要事件同步失败（important_events 表可能未创建）:', err))
+      }, 800)
+    }
+  }, [importantEvents, user])
+
   // 自动保存待办草稿
   useEffect(() => {
     try {
@@ -652,8 +834,17 @@ function App() {
   }, [logInput])
 
   useEffect(() => {
+    const validIds = new Set(logs.map(log => log.id))
+    Object.entries(logInsightAbortControllersRef.current).forEach(([key, controller]) => {
+      const [id] = key.split(':')
+      if (!validIds.has(Number(id))) {
+        controller.abort()
+        delete logInsightAbortControllersRef.current[key]
+        delete logInsightRequestIdsRef.current[key]
+      }
+    })
+
     setLogInsights(prev => {
-      const validIds = new Set(logs.map(log => log.id))
       let changed = false
       const next: Record<number, LogInsightState> = {}
       Object.entries(prev).forEach(([id, value]) => {
@@ -694,6 +885,11 @@ function App() {
       }
     } catch {}
   }, [logInsights])
+
+  useEffect(() => () => {
+    abortMainLogRequest()
+    abortAllLogInsightRequests()
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -795,6 +991,13 @@ function App() {
     return unsubscribe
   }, [])
 
+  useEffect(() => {
+    if (user) return
+    abortMainLogRequest()
+    abortAllLogInsightRequests()
+    setIsLogAiLoading(false)
+  }, [user])
+
   // === 登录后初始同步 + 实时订阅 ===
   useEffect(() => {
     if (!user) return
@@ -812,22 +1015,35 @@ function App() {
         // tags 表可能未创建，单独 try-catch
         let remoteTags: Tag[] = []
         try { remoteTags = await fetchTags(user.id) } catch {}
+        let remoteImportantEvents: ImportantEvent[] = []
+        try { remoteImportantEvents = sortImportantEvents(await fetchImportantEvents(user.id)) } catch {}
         if (cancelled) return
 
-        if (remoteTodos.length === 0 && todos.length > 0) {
-          // 首次登录，本地有数据：迁移到云端
-          await pushTodos(todos, user.id)
-          await pushLogs(logs, user.id)
-          pushTags(tags, user.id).catch(() => {})
-        } else if (remoteTodos.length > 0) {
-          // 云端有数据：拉取覆盖本地
+        const hasRemoteData =
+          remoteTodos.length > 0
+          || remoteLogs.length > 0
+          || remoteTags.length > 0
+          || remoteImportantEvents.length > 0
+
+        if (!hasRemoteData) {
+          if (todos.length > 0) await pushTodos(todos, user.id)
+          if (logs.length > 0) await pushLogs(logs, user.id)
+          if (tags.length > 0) pushTags(tags, user.id).catch(() => {})
+          if (importantEvents.length > 0) pushImportantEvents(importantEvents, user.id).catch(() => {})
+        } else {
           isRemoteUpdate.current = true
           if (syncTodosTimer.current) clearTimeout(syncTodosTimer.current)
           if (syncLogsTimer.current) clearTimeout(syncLogsTimer.current)
           if (syncTagsTimer.current) clearTimeout(syncTagsTimer.current)
+          if (syncImportantEventsTimer.current) clearTimeout(syncImportantEventsTimer.current)
           setTodos(remoteTodos)
           setLogs(remoteLogs)
           if (remoteTags.length > 0) setTags(remoteTags)
+          if (remoteImportantEvents.length > 0) {
+            setImportantEvents(remoteImportantEvents)
+          } else if (importantEvents.length > 0) {
+            pushImportantEvents(importantEvents, user.id).catch(() => {})
+          }
           setTimeout(() => { isRemoteUpdate.current = false }, 1000)
         }
         if (!cancelled) setSyncStatus('synced')
@@ -861,12 +1077,22 @@ function App() {
         setTimeout(() => { isRemoteUpdate.current = false }, 1000)
       })
     } catch {}
+    let importantEventsChannel: ReturnType<typeof subscribeImportantEvents> | null = null
+    try {
+      importantEventsChannel = subscribeImportantEvents(user.id, (newImportantEvents) => {
+        isRemoteUpdate.current = true
+        if (syncImportantEventsTimer.current) clearTimeout(syncImportantEventsTimer.current)
+        setImportantEvents(sortImportantEvents(newImportantEvents))
+        setTimeout(() => { isRemoteUpdate.current = false }, 1000)
+      })
+    } catch {}
 
     return () => {
       cancelled = true
       todosChannel.unsubscribe()
       logsChannel.unsubscribe()
       tagsChannel?.unsubscribe()
+      importantEventsChannel?.unsubscribe()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
@@ -879,6 +1105,7 @@ function App() {
       if (syncTodosTimer.current) clearTimeout(syncTodosTimer.current)
       if (syncLogsTimer.current) clearTimeout(syncLogsTimer.current)
       if (syncTagsTimer.current) clearTimeout(syncTagsTimer.current)
+      if (syncImportantEventsTimer.current) clearTimeout(syncImportantEventsTimer.current)
       setSyncStatus('syncing')
       try {
         const [remoteTodos, remoteLogs] = await Promise.all([
@@ -886,9 +1113,12 @@ function App() {
         ])
         let remoteTags: Tag[] = []
         try { remoteTags = await fetchTags(user.id) } catch {}
+        let remoteImportantEvents: ImportantEvent[] = []
+        try { remoteImportantEvents = sortImportantEvents(await fetchImportantEvents(user.id)) } catch {}
         setTodos(remoteTodos)
         setLogs(remoteLogs)
         if (remoteTags.length > 0) setTags(remoteTags)
+        if (remoteImportantEvents.length > 0) setImportantEvents(remoteImportantEvents)
         setSyncStatus('synced')
       } catch {
         setSyncStatus('error')
@@ -1005,15 +1235,14 @@ function App() {
   // === 日志操作 ===
   const addLog = (type: LogEntry['type'], content: string) => {
     if (!canEdit) return
-    if (!content.trim()) return
-    setLogs(prev => [...prev, {
-      id: Math.floor(Date.now() * 1000 + Math.random() * 1000), type, content: content.trim(),
-      createdAt: new Date().toISOString()
-    }])
+    const entry = createLogEntry(type, content)
+    if (!entry) return
+    appendLogEntry(entry)
   }
 
   const deleteLog = (id: number) => {
     if (!canEdit) return
+    abortLogInsightRequest(id)
     setLogs(prev => prev.filter(l => l.id !== id))
     setLogInsightInputs(prev => {
       if (!(id in prev)) return prev
@@ -1031,6 +1260,7 @@ function App() {
   const saveEditLog = () => {
     if (!canEdit) return
     if (editingLogId === null || !editContent.trim()) return
+    abortLogInsightRequest(editingLogId)
     setLogs(prev => prev.map(l => l.id === editingLogId ? { ...l, content: editContent.trim() } : l))
     setLogInsights(prev => {
       if (editingLogId === null || !(editingLogId in prev)) return prev
@@ -1073,40 +1303,49 @@ function App() {
     setTimeout(() => { textarea.focus(); textarea.setSelectionRange(newCursorPos, newCursorPos) }, 0)
   }
 
-  const handleLogSubmit = () => {
-    if (!logInput.trim() || isLogAiLoading) return
-    addLog('thought', logInput)
-    setLogInput('')
-  }
-
-  const handleAiChat = async () => {
-    if (!logInput.trim() || isLogAiLoading) return
-    const userMessage = logInput.replace(/^@AI\s*/, '').trim()
+  const handleLogSubmit = async () => {
+    if (!canEdit) return
+    if (isLogAiLoading || logChatAbortControllerRef.current) return
+    const rawInput = logInput.trim()
+    const isLegacyAiPrompt = rawInput.startsWith('@AI')
+    const userMessage = rawInput.replace(/^@AI\s*/, '').trim()
     if (!userMessage) return
-    if (!selectedChatModelId) {
-      addLog('ai_reply', '❌ 当前没有可用的 AI 对话模型，请先在服务端配置 Gemini / DeepSeek / Kimi。')
-      return
-    }
+    if (!isLegacyAiPrompt && userMessage.length < MIN_LOG_LENGTH) return
+
+    const thoughtEntry = createLogEntry('thought', userMessage)
+    if (!thoughtEntry) return
+
+    appendLogEntry(thoughtEntry)
+    setLogInput('')
+
+    if (!selectedChatModelId) return
+
+    const requestId = logChatRequestIdRef.current + 1
+    logChatRequestIdRef.current = requestId
+    const controller = new AbortController()
+    logChatAbortControllerRef.current = controller
     setIsLogAiLoading(true)
 
-    const recentLogs = logs.slice(-10).filter(l => l.type === 'ai_chat' || l.type === 'ai_reply')
-    const history: { role: 'user' | 'assistant'; content: string }[] = recentLogs.map(l => ({
-      role: l.type === 'ai_chat' ? 'user' as const : 'assistant' as const, content: l.content
-    }))
-
-    // 高级 AI：将待办列表作为上下文传递
-    const todoContext = buildTodoContext()
-
     try {
-      addLog('ai_chat', userMessage)
-      const aiResponse = await chatWithAI(userMessage, history, todoContext, {
-        modelId: selectedChatModelId,
-        useWebSearch: chatWebSearchEnabled,
-        reasoningEnabled: chatReasoningEnabled
-      })
+      const aiResponse = await chatWithAI(
+        userMessage,
+        buildMainLogHistory(logs),
+        buildTodoContext(),
+        {
+          modelId: selectedChatModelId,
+          useWebSearch: chatWebSearchEnabled,
+          reasoningEnabled: chatReasoningEnabled,
+          signal: controller.signal
+        }
+      )
+
+      if (logChatRequestIdRef.current !== requestId) return
+
       if (aiResponse) addLog('ai_reply', aiResponse)
-      setLogInput('')
     } catch (error) {
+      if (logChatRequestIdRef.current !== requestId) return
+      if (isAbortError(error)) return
+
       let errorMessage = 'AI 对话失败'
       if (error instanceof Error) {
         if (error.message.includes('API key') || error.message.includes('401')) {
@@ -1123,7 +1362,10 @@ function App() {
       }
       addLog('ai_reply', `❌ ${errorMessage}\n\n💡 提示: 检查 API Key 是否正确配置，或稍后重试`)
     } finally {
-      setIsLogAiLoading(false)
+      if (logChatRequestIdRef.current === requestId) {
+        logChatAbortControllerRef.current = null
+        setIsLogAiLoading(false)
+      }
     }
   }
 
@@ -1132,6 +1374,7 @@ function App() {
     actionType: LogAnalysisAction,
     options?: { regenerate?: boolean; followUp?: string; useWebSearch?: boolean; forceWebSearch?: boolean }
   ) => {
+    if (!canEdit) return
     if (!selectedLogModelId) return
     const currentState = logInsights[entry.id]
     const currentThread = currentState?.threads?.[actionType]
@@ -1139,6 +1382,11 @@ function App() {
 
     const followUp = options?.followUp?.trim()
     const logCapability = getModelFeatureCapability(selectedLogModel, 'logAnalysis')
+    const requestKey = getLogInsightRequestKey(entry.id, actionType)
+    const controller = new AbortController()
+    const requestId = (logInsightRequestIdsRef.current[requestKey] || 0) + 1
+    logInsightRequestIdsRef.current[requestKey] = requestId
+    logInsightAbortControllersRef.current[requestKey] = controller
     const shouldUseWebSearch = Boolean(
       (options?.useWebSearch ?? (currentThread ? currentThread.sourceMode === 'web' : logWebSearchEnabled))
       && logCapability?.supportsWebSearch
@@ -1186,9 +1434,12 @@ function App() {
           useWebSearch: shouldUseWebSearch,
           forceWebSearch: options?.forceWebSearch,
           reasoningEnabled: Boolean(logReasoningEnabled && logCapability?.supportsReasoning),
-          modelId: selectedLogModelId
+          modelId: selectedLogModelId,
+          signal: controller.signal
         }
       )
+
+      if (logInsightRequestIdsRef.current[requestKey] !== requestId) return
 
       setLogInsights(prev => {
         const previous = prev[entry.id]
@@ -1217,6 +1468,47 @@ function App() {
         }
       })
     } catch (error) {
+      if (logInsightRequestIdsRef.current[requestKey] !== requestId) return
+      if (isAbortError(error)) {
+        setLogInsights(prev => {
+          const previous = prev[entry.id]
+          const activeThread = previous?.threads?.[actionType]
+          if (!previous || !activeThread) return prev
+          if (activeThread.messages.length === 0) {
+            const nextThreads = { ...(previous.threads || {}) }
+            delete nextThreads[actionType]
+            if (Object.keys(nextThreads).length === 0) {
+              const next = { ...prev }
+              delete next[entry.id]
+              return next
+            }
+            return {
+              ...prev,
+              [entry.id]: {
+                activeAction: Object.keys(nextThreads)[0] as LogAnalysisAction,
+                threads: nextThreads
+              }
+            }
+          }
+          return {
+            ...prev,
+            [entry.id]: {
+              activeAction: actionType,
+              threads: {
+                ...(previous.threads || {}),
+                [actionType]: {
+                  ...activeThread,
+                  status: 'success',
+                  error: undefined,
+                  updatedAt: new Date().toISOString(),
+                }
+              }
+            }
+          }
+        })
+        return
+      }
+
       let errorMessage = 'AI 分析失败，请稍后重试'
       if (error instanceof Error) {
         if (error.message.includes('API key') || error.message.includes('401')) {
@@ -1256,6 +1548,10 @@ function App() {
           }
         }
       })
+    } finally {
+      if (logInsightRequestIdsRef.current[requestKey] === requestId) {
+        delete logInsightAbortControllersRef.current[requestKey]
+      }
     }
   }
 
@@ -1291,6 +1587,12 @@ function App() {
     })
   }
 
+  const handleAbortLogInsight = (entry: LogEntry) => {
+    const activeAction = logInsights[entry.id]?.activeAction
+    if (!activeAction) return
+    abortLogInsightRequest(entry.id, activeAction)
+  }
+
   const handleInsightFollowUp = async (entry: LogEntry) => {
     const activeAction = logInsights[entry.id]?.activeAction
     const followUp = logInsightInputs[entry.id]?.trim()
@@ -1311,10 +1613,11 @@ function App() {
     if (e.key === 'Enter' && !e.shiftKey) {
       if (e.nativeEvent.isComposing || e.keyCode === 229) return
       e.preventDefault()
+      if (isLogAiLoading) return
       const text = logInput.trim()
       if (!text) return
-      if (text.startsWith('@AI')) { handleAiChat(); return }
-      if (text.length >= MIN_LOG_LENGTH) handleLogSubmit()
+      const normalized = text.replace(/^@AI\s*/, '').trim()
+      if (text.startsWith('@AI') || normalized.length >= MIN_LOG_LENGTH) handleLogSubmit()
     }
   }
 
@@ -1333,6 +1636,10 @@ function App() {
   ]
   const normalizedQuery = searchQuery.trim().toLowerCase()
   const normalizedLogQuery = logSearchQuery.trim().toLowerCase()
+  const trimmedLogInput = logInput.trim()
+  const normalizedLogInput = trimmedLogInput.replace(/^@AI\s*/, '').trim()
+  const isLegacyAiInput = trimmedLogInput.startsWith('@AI')
+  const canSubmitLogInput = Boolean(normalizedLogInput) && (isLegacyAiInput || normalizedLogInput.length >= MIN_LOG_LENGTH)
   const shouldHideCompleted = hideCompleted && statusFilter !== 'completed'
   const todayStr = getToday()
   const tomorrowStr = getDateWithOffset(1)
@@ -1551,6 +1858,20 @@ function App() {
     }
   }
 
+  const normalizeImportantEvent = (raw: any): ImportantEvent | null => {
+    if (!raw || typeof raw !== 'object') return null
+    const title = typeof raw.title === 'string' ? raw.title.trim() : ''
+    const eventDate = normalizeEventDate(raw.eventDate)
+    if (!title || !eventDate) return null
+    return {
+      id: typeof raw.id === 'string' && raw.id.trim() ? raw.id : crypto.randomUUID(),
+      title,
+      eventDate,
+      createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
+      updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
+    }
+  }
+
   const normalizeNotificationSettings = (raw: any): NotificationSettings => {
     if (!raw || typeof raw !== 'object') {
       return { enabled: false, notifyToday: true, notifyTomorrow: true, notifyOverdue: true }
@@ -1588,6 +1909,7 @@ function App() {
       todos,
       logs,
       tags,
+      importantEvents,
       notificationSettings
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -1632,6 +1954,12 @@ function App() {
         normalizedTags.forEach(t => { if (!tagMap.has(t.name)) tagMap.set(t.name, t) })
         const uniqueTags = Array.from(tagMap.values())
 
+        const rawImportantEvents = Array.isArray(data.importantEvents) ? data.importantEvents : []
+        const normalizedImportantEvents = rawImportantEvents.map(normalizeImportantEvent).filter(Boolean) as ImportantEvent[]
+        const importantEventMap = new Map<string, ImportantEvent>()
+        normalizedImportantEvents.forEach(event => { if (!importantEventMap.has(event.id)) importantEventMap.set(event.id, event) })
+        const uniqueImportantEvents = sortImportantEvents(Array.from(importantEventMap.values()))
+
         const hasNotificationSettings = data.notificationSettings && typeof data.notificationSettings === 'object'
         const importedNotificationSettings = hasNotificationSettings ? normalizeNotificationSettings(data.notificationSettings) : null
 
@@ -1651,6 +1979,15 @@ function App() {
           if (uniqueTags.length > 0) {
             setTags(prev => mergeTagsByName(prev, uniqueTags))
           }
+          if (uniqueImportantEvents.length > 0) {
+            setImportantEvents(prev => {
+              const existingIds = new Set(prev.map(event => event.id))
+              return sortImportantEvents([
+                ...prev,
+                ...uniqueImportantEvents.filter(event => !existingIds.has(event.id))
+              ])
+            })
+          }
           if (importedNotificationSettings) {
             setNotificationSettings(prev => ({ ...prev, ...importedNotificationSettings }))
           }
@@ -1659,6 +1996,7 @@ function App() {
           setTodos(uniqueTodos)
           setLogs(uniqueLogs)
           setTags(ensureDefaultTags(uniqueTags.length > 0 ? uniqueTags : DEFAULT_TAGS))
+          setImportantEvents(uniqueImportantEvents)
           if (importedNotificationSettings) {
             setNotificationSettings(importedNotificationSettings)
           }
@@ -1741,6 +2079,12 @@ function App() {
   const weeklyDueTotal = weeklyDueStats.reduce((sum, d) => sum + d.total, 0)
   const weeklyDueCompleted = weeklyDueStats.reduce((sum, d) => sum + d.completed, 0)
   const weeklyDueRate = weeklyDueTotal > 0 ? Math.round((weeklyDueCompleted / weeklyDueTotal) * 100) : 0
+  const importantEventStats = importantEventCards.reduce((acc, event) => {
+    if (event.status.bucket === 'upcoming') acc.upcoming += 1
+    else if (event.status.bucket === 'past') acc.past += 1
+    else acc.today += 1
+    return acc
+  }, { upcoming: 0, past: 0, today: 0 })
 
   const stats = {
     total: todos.length,
@@ -1755,6 +2099,12 @@ function App() {
     completionRate: todos.length > 0 ? Math.round((todos.filter(t => t.completed).length / todos.length) * 100) : 0,
     weeklyDueStats,
     weeklyDueRate,
+    importantEvents: {
+      total: importantEventCards.length,
+      upcoming: importantEventStats.upcoming,
+      past: importantEventStats.past,
+      today: importantEventStats.today,
+    }
   }
 
   const isFilteredView = Boolean(searchQuery.trim()) || statusFilter !== 'all' || hideCompleted || selectedCategory !== '全部'
@@ -1972,6 +2322,84 @@ function App() {
                 </div>
               </div>
             ))}
+          </div>
+          <div className="important-events-section">
+            <div className="important-events-header">
+              <div>
+                <h4>重要事件</h4>
+                <p>
+                  共 {stats.importantEvents.total} 项
+                  {stats.importantEvents.today > 0 ? `，今天 ${stats.importantEvents.today} 项` : ''}
+                </p>
+              </div>
+              <div className="important-events-summary">
+                <span className="important-events-chip upcoming">未到 {stats.importantEvents.upcoming}</span>
+                <span className="important-events-chip today">今天 {stats.importantEvents.today}</span>
+                <span className="important-events-chip past">已过 {stats.importantEvents.past}</span>
+              </div>
+            </div>
+            <div className="important-event-form">
+              <input
+                type="text"
+                placeholder="例如：考研初试、生日、纪念日"
+                value={importantEventTitle}
+                onChange={(e) => setImportantEventTitle(e.target.value)}
+                disabled={!canEdit}
+              />
+              <input
+                type="date"
+                value={importantEventDate}
+                onChange={(e) => setImportantEventDate(e.target.value)}
+                disabled={!canEdit}
+              />
+              <button
+                className="important-event-save-btn"
+                onClick={saveImportantEvent}
+                disabled={!canEdit || !importantEventTitle.trim() || !normalizeEventDate(importantEventDate)}
+              >
+                {editingImportantEventId ? '保存事件' : '新增事件'}
+              </button>
+              {editingImportantEventId && (
+                <button className="important-event-cancel-btn" onClick={resetImportantEventForm}>
+                  取消
+                </button>
+              )}
+            </div>
+            <div className="important-events-grid">
+              {importantEventCards.length > 0 ? importantEventCards.map(event => (
+                <div key={event.id} className={`important-event-card ${event.status.bucket}`}>
+                  <div className="important-event-card-top">
+                    <div>
+                      <h5>{event.title}</h5>
+                      <span className="important-event-date">{event.eventDate}</span>
+                    </div>
+                    <div className="important-event-card-actions">
+                      <button
+                        className="important-event-icon-btn"
+                        onClick={() => startEditImportantEvent(event)}
+                        disabled={!canEdit}
+                        title="编辑事件"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        className="important-event-icon-btn danger"
+                        onClick={() => deleteImportantEvent(event.id)}
+                        disabled={!canEdit}
+                        title="删除事件"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="important-event-status">{event.status.text}</div>
+                </div>
+              )) : (
+                <div className="important-events-empty">
+                  添加一个纪念日、考试日或截止纪念点，这里会持续显示还剩多少天或已过去多久。
+                </div>
+              )}
+            </div>
           </div>
           <div className="stats-actions">
             <button className="export-btn" onClick={handleExport}>
@@ -2732,6 +3160,8 @@ function App() {
                         className="clear-history-btn"
                         onClick={() => {
                           if (canEdit && confirm('确定要清除所有日志吗？此操作不可恢复。')) {
+                            abortMainLogRequest()
+                            abortAllLogInsightRequests()
                             setLogs([])
                             setLogInsights({})
                             setLogInsightInputs({})
@@ -2749,7 +3179,7 @@ function App() {
                     value={logInput}
                     onChange={(e) => setLogInput(e.target.value)}
                     onKeyDown={handleLogKeyDown}
-                    disabled={!canEdit || isLogAiLoading}
+                    disabled={!canEdit}
                     rows={4}
                   />
                   <div className="ai-model-controls">
@@ -2793,25 +3223,35 @@ function App() {
                   </div>
                   <div className="log-actions">
                     <div className="log-hint-area">
-                      <span className="log-hint">保存后可对单条日志发起 AI 深入分析</span>
-                      {!logInput.trim().startsWith('@AI') && logInput.trim().length > 0 && (
-                        <span className={`char-count ${logInput.trim().length >= MIN_LOG_LENGTH ? 'valid' : 'invalid'}`}>
-                          {logInput.trim().length}/{MIN_LOG_LENGTH}
+                      <span className="log-hint">
+                        {isLogAiLoading
+                          ? 'AI 正在回复，你可以继续编辑草稿，或点击发送按钮中止本轮回答'
+                          : '发布后会自动触发当前 AI 继续交流，保存后也可对单条日志发起深入分析'}
+                      </span>
+                      {!isLegacyAiInput && trimmedLogInput.length > 0 && (
+                        <span className={`char-count ${trimmedLogInput.length >= MIN_LOG_LENGTH ? 'valid' : 'invalid'}`}>
+                          {trimmedLogInput.length}/{MIN_LOG_LENGTH}
                         </span>
                       )}
                     </div>
                     <div className="log-action-buttons">
-                      {logInput.trim() && (
+                      {trimmedLogInput && (
                         <button className="log-clear-btn" onClick={() => setLogInput('')} title="清除草稿">
                           <Trash2 size={16} />
                         </button>
                       )}
                       <button
-                        className={`log-send-btn ${isLogAiLoading ? 'loading' : ''}`}
-                        onClick={() => logInput.trim().startsWith('@AI') ? handleAiChat() : handleLogSubmit()}
-                        disabled={!canEdit || !logInput.trim() || isLogAiLoading}
+                        className={`log-send-btn ${isLogAiLoading ? 'loading stop' : ''}`}
+                        onClick={() => {
+                          if (isLogAiLoading) {
+                            abortMainLogRequest()
+                            return
+                          }
+                          void handleLogSubmit()
+                        }}
+                        disabled={!canEdit || (!isLogAiLoading && !canSubmitLogInput)}
                       >
-                        {isLogAiLoading ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
+                        {isLogAiLoading ? <X size={18} /> : <Send size={18} />}
                       </button>
                     </div>
                   </div>
@@ -2962,6 +3402,14 @@ function App() {
                                       >
                                         联网重答
                                       </button>
+                                      {insight.status === 'loading' && (
+                                        <button
+                                          className="log-insight-secondary-btn danger"
+                                          onClick={() => handleAbortLogInsight(entry)}
+                                        >
+                                          中止回答
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
 

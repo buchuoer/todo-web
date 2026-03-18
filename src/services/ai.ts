@@ -45,7 +45,11 @@ interface ExtractedTodo {
 
 const AI_API_BASE = '/api/ai'
 
-async function requestAi<T>(path: string, payload: unknown): Promise<T> {
+async function requestAi<T>(
+  path: string,
+  payload: unknown,
+  requestOptions?: { signal?: AbortSignal }
+): Promise<T> {
   let response: Response
 
   try {
@@ -55,6 +59,7 @@ async function requestAi<T>(path: string, payload: unknown): Promise<T> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
+      signal: requestOptions?.signal,
     })
   } catch (error) {
     if (error instanceof Error) throw error
@@ -130,9 +135,15 @@ export async function chatWithAI(
     modelId?: AiModelId
     useWebSearch?: boolean
     reasoningEnabled?: boolean
+    signal?: AbortSignal
   }
 ) {
-  return requestAi<string>('chat', { text, history, todoContext, modelId: options?.modelId, options })
+  const { signal, ...requestOptions } = options || {}
+  return requestAi<string>(
+    'chat',
+    { text, history, todoContext, modelId: requestOptions.modelId, options: requestOptions },
+    { signal }
+  )
 }
 
 export async function analyzeLogWithAI(
@@ -141,17 +152,18 @@ export async function analyzeLogWithAI(
   context?: { todoContext?: string; recentLogs?: string },
   history?: LogAnalysisMessage[],
   followUp?: string,
-  options?: LogAnalysisOptions & { modelId?: AiModelId }
+  options?: LogAnalysisOptions & { modelId?: AiModelId; signal?: AbortSignal }
 ): Promise<LogAnalysisResult> {
+  const { signal, ...requestOptions } = options || {}
   return requestAi<LogAnalysisResult>('analyze-log', {
     text,
     actionType,
     context,
     history,
     followUp,
-    modelId: options?.modelId,
-    options,
-  })
+    modelId: requestOptions.modelId,
+    options: requestOptions,
+  }, { signal })
 }
 
 /**

@@ -28,6 +28,14 @@ export interface LogEntry {
   createdAt: string
 }
 
+export interface ImportantEvent {
+  id: string
+  title: string
+  eventDate: string
+  createdAt: string
+  updatedAt: string
+}
+
 // ---- Supabase row shapes ----
 interface TodoRow {
   id: string
@@ -59,6 +67,15 @@ interface TagRow {
   border_color: string
   is_default: boolean
   created_at: string
+}
+
+interface ImportantEventRow {
+  id: string
+  user_id: string
+  title: string
+  event_date: string
+  created_at: string
+  updated_at: string
 }
 
 // ---- Conversion helpers ----
@@ -131,14 +148,37 @@ function rowToTag(row: TagRow): Tag {
   }
 }
 
+function importantEventToRow(event: ImportantEvent, userId: string): ImportantEventRow {
+  return {
+    id: event.id,
+    user_id: userId,
+    title: event.title,
+    event_date: event.eventDate,
+    created_at: event.createdAt,
+    updated_at: event.updatedAt,
+  }
+}
+
+function rowToImportantEvent(row: ImportantEventRow): ImportantEvent {
+  return {
+    id: row.id,
+    title: row.title,
+    eventDate: row.event_date,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
 // ---- Push locks (prevent Realtime echo during delete+insert) ----
 let pushingTodos = false
 let pushingLogs = false
 let pushingTags = false
+let pushingImportantEvents = false
 
 export function isPushingTodos() { return pushingTodos }
 export function isPushingLogs() { return pushingLogs }
 export function isPushingTags() { return pushingTags }
+export function isPushingImportantEvents() { return pushingImportantEvents }
 
 // ---- Push (local → cloud) ----
 
@@ -178,6 +218,19 @@ export async function pushTags(tags: Tag[], userId: string) {
     if (error) throw error
   } finally {
     setTimeout(() => { pushingTags = false }, 500)
+  }
+}
+
+export async function pushImportantEvents(events: ImportantEvent[], userId: string) {
+  pushingImportantEvents = true
+  try {
+    await supabase.from('important_events').delete().eq('user_id', userId)
+    if (events.length === 0) return
+    const rows = events.map(event => importantEventToRow(event, userId))
+    const { error } = await supabase.from('important_events').insert(rows)
+    if (error) throw error
+  } finally {
+    setTimeout(() => { pushingImportantEvents = false }, 500)
   }
 }
 
@@ -227,6 +280,23 @@ export async function fetchTags(userId: string): Promise<Tag[]> {
   return rawTags.filter(tag => {
     if (seen.has(tag.name)) return false
     seen.add(tag.name)
+    return true
+  })
+}
+
+export async function fetchImportantEvents(userId: string): Promise<ImportantEvent[]> {
+  const { data, error } = await supabase
+    .from('important_events')
+    .select('*')
+    .eq('user_id', userId)
+    .order('event_date', { ascending: true })
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  const rawEvents = (data as ImportantEventRow[]).map(rowToImportantEvent)
+  const seen = new Set<string>()
+  return rawEvents.filter(event => {
+    if (seen.has(event.id)) return false
+    seen.add(event.id)
     return true
   })
 }
@@ -282,6 +352,24 @@ export function subscribeTags(
         if (pushingTags) return // 推送期间忽略回流
         const tags = await fetchTags(userId)
         callback(tags)
+      },
+    )
+    .subscribe()
+}
+
+export function subscribeImportantEvents(
+  userId: string,
+  callback: (events: ImportantEvent[]) => void,
+): RealtimeChannel {
+  return supabase
+    .channel('important-events-changes')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'important_events', filter: `user_id=eq.${userId}` },
+      async () => {
+        if (pushingImportantEvents) return
+        const events = await fetchImportantEvents(userId)
+        callback(events)
       },
     )
     .subscribe()

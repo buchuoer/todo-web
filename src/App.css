@@ -1354,6 +1354,227 @@ input:focus, textarea:focus {
   transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.important-events-section {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 0.5px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.important-events-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.important-events-header h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.important-events-header p {
+  margin: 4px 0 0 0;
+  font-size: 12px;
+  color: var(--gray);
+}
+
+.important-events-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.important-events-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.important-events-chip.upcoming {
+  background: rgba(0, 122, 255, 0.12);
+  color: var(--primary);
+}
+
+.important-events-chip.today {
+  background: rgba(255, 149, 0, 0.12);
+  color: var(--orange);
+}
+
+.important-events-chip.past {
+  background: rgba(255, 59, 48, 0.12);
+  color: var(--red);
+}
+
+.important-event-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr) auto auto;
+  gap: 10px;
+}
+
+.important-event-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 14px;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.important-event-form input:focus {
+  border-color: var(--primary);
+}
+
+.important-event-save-btn,
+.important-event-cancel-btn {
+  border: none;
+  border-radius: 12px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.important-event-save-btn {
+  background: var(--primary);
+  color: white;
+}
+
+.important-event-save-btn:disabled {
+  background: var(--gray-light);
+  cursor: not-allowed;
+}
+
+.important-event-cancel-btn {
+  background: var(--tab-bg);
+  color: var(--text-secondary);
+}
+
+.important-events-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.important-event-card {
+  border-radius: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--card-hover), var(--card));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.important-event-card.upcoming {
+  border-color: rgba(0, 122, 255, 0.18);
+}
+
+.important-event-card.today {
+  border-color: rgba(255, 149, 0, 0.22);
+  background: linear-gradient(180deg, rgba(255, 149, 0, 0.1), var(--card));
+}
+
+.important-event-card.past {
+  border-color: rgba(255, 59, 48, 0.18);
+}
+
+.important-event-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.important-event-card h5 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.important-event-date {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--gray);
+}
+
+.important-event-status {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.important-event-card.upcoming .important-event-status {
+  color: var(--primary);
+}
+
+.important-event-card.today .important-event-status {
+  color: var(--orange);
+}
+
+.important-event-card.past .important-event-status {
+  color: var(--red);
+}
+
+.important-event-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.important-event-icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  border: none;
+  background: var(--tab-bg);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.important-event-icon-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.important-event-icon-btn.danger:hover:not(:disabled) {
+  background: rgba(255, 59, 48, 0.1);
+  color: var(--red);
+}
+
+.important-event-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.important-events-empty {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--tab-bg);
+  color: var(--gray);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 /* === 导出导入按钮 === */
 .stats-actions {
   display: flex;
@@ -1723,6 +1944,8 @@ input:focus, textarea:focus {
 .log-send-btn:active { transform: scale(0.95); }
 .log-send-btn:disabled { background: var(--gray-light); cursor: not-allowed; }
 .log-send-btn.loading { background: var(--gray-light); }
+.log-send-btn.stop { background: rgba(255, 59, 48, 0.12); color: var(--red); }
+.log-send-btn.stop:disabled { background: rgba(255, 59, 48, 0.12); color: var(--red); cursor: pointer; }
 
 /* === 日志列表 === */
 .logs-list {
@@ -2020,6 +2243,11 @@ input:focus, textarea:focus {
 .log-insight-secondary-btn:disabled {
   cursor: wait;
   opacity: 0.7;
+}
+
+.log-insight-secondary-btn.danger {
+  background: rgba(255, 59, 48, 0.1);
+  color: var(--red);
 }
 
 .log-insight-thread {
@@ -3199,20 +3427,47 @@ button:active::after {
 }
 
 @media (max-width: 768px) {
+  .stats-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .important-events-header,
+  .important-event-form,
   .log-actions,
   .log-analysis-controls {
     align-items: flex-start;
     flex-direction: column;
   }
 
+  .important-event-form {
+    grid-template-columns: 1fr;
+  }
+
   .log-hint-area,
   .log-action-buttons,
-  .log-analysis-controls-right {
+  .log-analysis-controls-right,
+  .important-events-summary {
     width: 100%;
   }
 
   .log-action-buttons {
     justify-content: flex-end;
+  }
+
+  .important-events-summary {
+    justify-content: flex-start;
+  }
+
+  .log-insight-header,
+  .log-insight-meta,
+  .log-insight-composer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .log-insight-send-btn {
+    width: 100%;
+    justify-content: center;
   }
 
   .ai-model-select {
