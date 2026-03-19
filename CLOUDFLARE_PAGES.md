@@ -6,6 +6,11 @@
 - Build output directory: `dist`
 - Root directory: `/`
 
+Important:
+- This repository targets `Cloudflare Pages`, not `wrangler deploy` for Workers.
+- Do **not** use `npx wrangler deploy`; that command will try to initialize a Workers/Vite integration and may pull in `@cloudflare/vite-plugin`, which is incompatible with this repo's Vite 4 setup.
+- If you need an explicit deploy command in CI or Cloudflare, use `npm run pages:deploy`.
+
 ## Frontend Environment Variables
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
@@ -53,7 +58,8 @@ Cloudflare's official Pages docs currently recommend `wrangler pages dev <DIRECT
 2. Connect this GitHub repository.
 3. Set the build settings above.
 4. Add the frontend env vars and Functions secrets.
-5. Deploy once on a preview branch, verify `/api/ai/*` requests succeed, then promote to production.
+5. If your platform requires a deploy command after build, set it to `npm run pages:deploy`.
+6. Deploy once on a preview branch, verify `/api/ai/*` requests succeed, then promote to production.
 
 ## Security Outcome
 - Browser bundle no longer contains AI provider API keys.
